@@ -1139,7 +1139,8 @@ var OPENCODE_EVENTS = {
   "step-finish": "Usage"
 };
 var SHELL_TOOL_NAME = "bash";
-var NATIVE_TO_CANONICAL7 = { webfetch: "WebFetch", [SHELL_TOOL_NAME]: "Bash" };
+var SHELL_TOOL_NAMES4 = Object.freeze([SHELL_TOOL_NAME, "shell"]);
+var NATIVE_TO_CANONICAL7 = { webfetch: "WebFetch", ...Object.fromEntries(SHELL_TOOL_NAMES4.map((n3) => [n3, "Bash"])) };
 function toCanonicalTool(name) {
   if (name.startsWith(OWN_WIRE_PREFIX)) return name.slice(OWN_WIRE_PREFIX.length);
   return Object.prototype.hasOwnProperty.call(NATIVE_TO_CANONICAL7, name) ? NATIVE_TO_CANONICAL7[name] : name;
@@ -7608,7 +7609,7 @@ function hookInstallFor(ctx, row, command) {
       kind: "plugin-list",
       file: path3.join(opencodeDirOf(ctx.env, ctx.home), OPENCODE_BASE_CONFIG_FILE),
       key: ["plugin"],
-      entry: path3.join(ctx.pkgDir, ...OPENCODE_PLUGIN_PATH)
+      entry: ctx.pkgDir
     };
   }
   return { kind: "package", via: ch.path };
@@ -8643,10 +8644,13 @@ function isNativeSpec(e) {
   return typeof e === "string" && e.startsWith(NATIVE_PLUGIN_PREFIX);
 }
 function isStaleOwnPlugin(e, entry2) {
-  if (typeof e !== "string" || e === entry2 || !path12.isAbsolute(e) || existsSync12(e)) return false;
+  if (typeof e !== "string" || e === entry2 || !path12.isAbsolute(e)) return false;
+  if (e === path12.join(entry2, ...OPENCODE_PLUGIN_PATH)) return true;
+  if (existsSync12(e)) return false;
   const seg = e.split("\\").join("/").split("/");
   const n3 = seg.length;
-  return n3 >= 3 && seg[n3 - 1] === "plugin.js" && seg[n3 - 2] === "opencode" && seg[n3 - 3] === "context-mode";
+  if (n3 >= 3 && seg[n3 - 1] === "plugin.js" && seg[n3 - 2] === "opencode" && seg[n3 - 3] === "context-mode") return true;
+  return n3 >= 2 && seg[n3 - 1] === "context-mode" && seg[n3 - 2] === "node_modules";
 }
 function wantedPluginList(list2, entry2) {
   const native = list2.some(isNativeSpec);
@@ -8754,9 +8758,17 @@ function statusOf(row, text2) {
   }
   return void 0;
 }
+function opencodeListArgs(bin, env) {
+  const r2 = runBin(bin, ["--version"], env);
+  const text2 = `${r2.stdout}${r2.stderr}`;
+  const digits = text2.split("").filter((c3) => c3 >= "0" && c3 <= "9" || c3 === ".").join("");
+  const major = Number(digits.split(".")[0]);
+  return major >= 2 ? ["mcp", "list", "--standalone"] : ["mcp", "list", "--pure"];
+}
 function listState(row, env) {
-  const l2 = row.listCommand;
-  if (!l2 || !hostBin(l2.bin, env).file) return { status: void 0 };
+  const l0 = row.listCommand;
+  if (!l0 || !hostBin(l0.bin, env).file) return { status: void 0 };
+  const l2 = row.id === "opencode" ? { bin: l0.bin, args: opencodeListArgs(l0.bin, env) } : l0;
   const r2 = runBin(l2.bin, l2.args, env);
   const ok = r2.status === 0 && `${r2.stdout}${r2.stderr}`.includes("context-mode");
   const check = { name: "list", ok, detail: ok ? void 0 : `${l2.bin} ${l2.args.join(" ")} does not list context-mode` };

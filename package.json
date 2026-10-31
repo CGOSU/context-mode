@@ -9,6 +9,10 @@
   "engines": {
     "node": ">=24.15.0"
   },
+  "exports": {
+    ".": "./opencode/plugin.js",
+    "./server": "./opencode/plugin.js"
+  },
   "files": [
     ".claude-plugin",
     ".codex-plugin",
@@ -63,5 +67,5 @@
     "url": "git+https://github.com/mksglu/context-mode.git"
   },
   "type": "module",
-  "version": "2.0.0-next.18"
+  "version": "2.0.0-next.20"
 }

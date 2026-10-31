@@ -362,7 +362,7 @@ var DECISION_OPTION_KEY = "option";
 var DECISION_LABEL_JOIN = " | ";
 var RELEASE_REPO_URL = "https://github.com/mksglu/context-mode.git";
 var RELEASE_BRANCH = "release";
-var BUNDLE_SHA = true ? "ea4179fd9a2c4c55eadc9184a295a7f974df90bd" : void 0;
+var BUNDLE_SHA = true ? "efe519b1d2f8b002ada6ef542af2df61e2abc20f" : void 0;
 var DOCTOR_CHECK_ORDER = Object.freeze(["D1", "D2", "D3", "D4", "D5", "D5b", "D6", "D7", "D8", "D9", "D10", "D11"]);
 var DOCTOR_LABEL = Object.freeze({
   D1: "version",
@@ -1427,7 +1427,8 @@ var OPENCODE_EVENTS = {
   "step-finish": "Usage"
 };
 var SHELL_TOOL_NAME = "bash";
-var NATIVE_TO_CANONICAL7 = { webfetch: "WebFetch", [SHELL_TOOL_NAME]: "Bash" };
+var SHELL_TOOL_NAMES4 = Object.freeze([SHELL_TOOL_NAME, "shell"]);
+var NATIVE_TO_CANONICAL7 = { webfetch: "WebFetch", ...Object.fromEntries(SHELL_TOOL_NAMES4.map((n) => [n, "Bash"])) };
 function toCanonicalTool(name) {
   if (name.startsWith(OWN_WIRE_PREFIX)) return name.slice(OWN_WIRE_PREFIX.length);
   return Object.prototype.hasOwnProperty.call(NATIVE_TO_CANONICAL7, name) ? NATIVE_TO_CANONICAL7[name] : name;
@@ -22826,7 +22827,7 @@ function ownMcpValue(agent, node, server2) {
   return { ...mcp.fields, [MCP_COMMAND_FIELD]: node, [MCP_ARGS_FIELD]: [server2, AGENT_ARG, agent, ...tail] };
 }
 function opencodePluginFile() {
-  return join8(dirname4(process.argv[1] ?? ""), ...OPENCODE_PLUGIN_PATH);
+  return dirname4(process.argv[1] ?? "");
 }
 function listTarget(key, own2, v1, alt = []) {
   return {
@@ -23657,7 +23658,8 @@ function checkShell(env) {
 // src/core/ops/doctor-hook.ts
 import { existsSync as existsSync9, readFileSync as readFileSync9 } from "node:fs";
 import path4 from "node:path";
-var D5_SAMPLES = 3;
+var D5_MIN_PAIRS = 3;
+var D5_MAX_PAIRS = 9;
 var row = (status, detail, fixCommand) => fixCommand === void 0 ? { id: "D5", label: DOCTOR_LABEL.D5, status, detail } : { id: "D5", label: DOCTOR_LABEL.D5, status, detail, fixCommand };
 function isObject5(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -23701,7 +23703,9 @@ async function checkHookRoundTrip(i) {
   const fixture = loadFixture(i.bundleDir, i.agent);
   if (fixture === null) return row("UNKNOWN", D5_NO_FIXTURE_DETAIL(i.agent));
   const now = i.now ?? (() => performance.now());
-  const samples = Math.max(1, i.samples ?? D5_SAMPLES);
+  const fixed = i.samples === void 0 ? null : Math.max(1, i.samples);
+  const maxPairs = fixed ?? D5_MAX_PAIRS;
+  const minPairs = fixed ?? D5_MIN_PAIRS;
   const bareMs = i.bareMs ?? (async () => {
     const t = performance.now();
     await runProcess([process.execPath, "-e", ""], { cwd: i.bundleDir, env: i.env, signal: i.signal, timeoutMs: HOOK_TIMEOUT_MS });
@@ -23709,7 +23713,8 @@ async function checkHookRoundTrip(i) {
   });
   const hookWalls = [];
   const bareWalls = [];
-  for (let n = 0; n < samples; n++) {
+  let ms = 0;
+  for (let n = 1; n <= maxPairs; n++) {
     const start = now();
     const r = await runProcess([process.execPath, path4.join(i.bundleDir, HOOK_ENTRY_FILE), AGENT_ARG, i.agent], {
       cwd: i.bundleDir,
@@ -23721,8 +23726,9 @@ async function checkHookRoundTrip(i) {
     hookWalls.push(now() - start);
     if (!isNativeShape(r.stdout.toString("utf8"), r.exitCode, r.killed, fixture.event)) return row("FAIL", D5_SHAPE_DETAIL, D5_FIX);
     bareWalls.push(await bareMs());
+    ms = Math.max(0, Math.round(Math.min(...hookWalls) - Math.min(...bareWalls)));
+    if (n >= minPairs && ms <= HOOK_P95_MS) break;
   }
-  const ms = Math.max(0, Math.round(Math.min(...hookWalls) - Math.min(...bareWalls)));
   if (ms > HOOK_P95_MS) return row("FAIL", D5_SLOW_DETAIL(ms), D5_FIX);
   return row("PASS", DOCTOR_PASS_DETAIL);
 }
@@ -29219,7 +29225,7 @@ function checkCall(tool, input) {
 // src/entries/opencode.ts
 var AGENT = "opencode";
 var id = PLUGIN_ID;
-async function setup(app) {
+async function setupLegacy(app) {
   const cwd = app.directory;
   const env = process.env;
   const turns = /* @__PURE__ */ new Map();
@@ -29301,6 +29307,7 @@ async function setup(app) {
         callID: input.callID,
         args: input.args,
         output: output.output,
+        isError: output.isError,
         turn: turnOf(sessionId)
       });
     },
@@ -29324,9 +29331,61 @@ async function setup(app) {
     }
   };
 }
+function oc2Text(content) {
+  if (typeof content === "string") return content;
+  return (content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n");
+}
+async function setup(ctx) {
+  const tools = /* @__PURE__ */ new Map();
+  const hooks = await setupLegacy({
+    directory: ctx.location.directory,
+    tool(name, def) {
+      tools.set(name, {
+        name,
+        description: def.description,
+        input: external_exports.toJSONSchema(def.args, { target: "draft-2020-12", io: "input" }),
+        options: { codemode: false },
+        // a ctx_* tool is listed to the model by name, not behind the host's code tool
+        async execute(input, context) {
+          return { content: await def.execute(input, { sessionID: context.sessionID, abort: context.signal }) };
+        }
+      });
+    }
+  });
+  await ctx.tool.transform((editor) => {
+    for (const t of tools.values()) editor.add(t);
+  });
+  await ctx.tool.hook("execute.before", async (i) => {
+    await hooks["tool.execute.before"]({ tool: i.tool, sessionID: i.sessionID, callID: i.id }, { args: i.input });
+  });
+  await ctx.tool.hook("execute.after", async (i) => {
+    const failed2 = i.status === "error";
+    const output = failed2 ? i.error?.message ?? "" : oc2Text(i.result?.content);
+    await hooks["tool.execute.after"]({ tool: i.tool, sessionID: i.sessionID, callID: i.id, args: i.input }, { output, isError: failed2 });
+  });
+  await ctx.session.hook("prompt", async (p) => {
+    await hooks["chat.message"]({ sessionID: p.sessionID }, { parts: [{ type: "text", text: p.prompt?.text ?? "" }] });
+  });
+  await ctx.session.hook("context", async (c) => {
+    const system = [];
+    await hooks["experimental.chat.system.transform"]({ sessionID: c.sessionID }, { system });
+    for (const text of system) if (!c.system.some((p) => p.text === text)) c.system.push({ type: "text", text });
+  });
+  await ctx.session.hook("compaction", async (c) => {
+    await hooks["experimental.session.compacting"]({ sessionID: c.sessionID });
+  });
+  const stop = new AbortController();
+  void (async () => {
+    for await (const e of ctx.event.subscribe({ types: ["session.step.ended"], signal: stop.signal })) {
+      await hooks.event({ event: { type: "message.part.updated", properties: { part: { type: "step-finish", sessionID: e.data?.sessionID } } } });
+    }
+  })().catch(() => {
+  });
+  return () => stop.abort();
+}
 async function server(input, _options) {
   const tool = {};
-  const hooks = await setup({
+  const hooks = await setupLegacy({
     directory: input.directory,
     tool(name, def) {
       const shape = def.args.shape;
@@ -29340,5 +29399,6 @@ export {
   opencode_default as default,
   id,
   server,
-  setup
+  setup,
+  setupLegacy
 };

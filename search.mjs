@@ -1040,7 +1040,8 @@ var OPENCODE_EVENTS = {
   "step-finish": "Usage"
 };
 var SHELL_TOOL_NAME = "bash";
-var NATIVE_TO_CANONICAL7 = { webfetch: "WebFetch", [SHELL_TOOL_NAME]: "Bash" };
+var SHELL_TOOL_NAMES4 = Object.freeze([SHELL_TOOL_NAME, "shell"]);
+var NATIVE_TO_CANONICAL7 = { webfetch: "WebFetch", ...Object.fromEntries(SHELL_TOOL_NAMES4.map((n) => [n, "Bash"])) };
 function toCanonicalTool(name) {
   if (name.startsWith(OWN_WIRE_PREFIX)) return name.slice(OWN_WIRE_PREFIX.length);
   return Object.prototype.hasOwnProperty.call(NATIVE_TO_CANONICAL7, name) ? NATIVE_TO_CANONICAL7[name] : name;

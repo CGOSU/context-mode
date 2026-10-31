@@ -28343,7 +28343,7 @@ var DECISION_SOURCE = "decision";
 var DECISION_USER_LABEL = "decision (user)";
 var RELEASE_REPO_URL = "https://github.com/mksglu/context-mode.git";
 var RELEASE_BRANCH = "release";
-var BUNDLE_SHA = true ? "ea4179fd9a2c4c55eadc9184a295a7f974df90bd" : void 0;
+var BUNDLE_SHA = true ? "efe519b1d2f8b002ada6ef542af2df61e2abc20f" : void 0;
 var DOCTOR_CHECK_ORDER = Object.freeze(["D1", "D2", "D3", "D4", "D5", "D5b", "D6", "D7", "D8", "D9", "D10", "D11"]);
 var DOCTOR_LABEL = Object.freeze({
   D1: "version",
@@ -44917,7 +44917,8 @@ var OPENCODE_EVENTS = {
   "step-finish": "Usage"
 };
 var SHELL_TOOL_NAME = "bash";
-var NATIVE_TO_CANONICAL7 = { webfetch: "WebFetch", [SHELL_TOOL_NAME]: "Bash" };
+var SHELL_TOOL_NAMES4 = Object.freeze([SHELL_TOOL_NAME, "shell"]);
+var NATIVE_TO_CANONICAL7 = { webfetch: "WebFetch", ...Object.fromEntries(SHELL_TOOL_NAMES4.map((n) => [n, "Bash"])) };
 function toCanonicalTool(name) {
   if (name.startsWith(OWN_WIRE_PREFIX)) return name.slice(OWN_WIRE_PREFIX.length);
   return Object.prototype.hasOwnProperty.call(NATIVE_TO_CANONICAL7, name) ? NATIVE_TO_CANONICAL7[name] : name;
@@ -47684,7 +47685,7 @@ function ownMcpValue(agent, node3, server) {
   return { ...mcp.fields, [MCP_COMMAND_FIELD]: node3, [MCP_ARGS_FIELD]: [server, AGENT_ARG, agent, ...tail] };
 }
 function opencodePluginFile() {
-  return join6(dirname3(process.argv[1] ?? ""), ...OPENCODE_PLUGIN_PATH);
+  return dirname3(process.argv[1] ?? "");
 }
 function listTarget(key, own4, v1, alt = []) {
   return {
@@ -48515,7 +48516,8 @@ function checkShell(env) {
 // src/core/ops/doctor-hook.ts
 import { existsSync as existsSync10, readFileSync as readFileSync7 } from "node:fs";
 import path4 from "node:path";
-var D5_SAMPLES = 3;
+var D5_MIN_PAIRS = 3;
+var D5_MAX_PAIRS = 9;
 var row = (status, detail, fixCommand) => fixCommand === void 0 ? { id: "D5", label: DOCTOR_LABEL.D5, status, detail } : { id: "D5", label: DOCTOR_LABEL.D5, status, detail, fixCommand };
 function isObject5(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -48559,7 +48561,9 @@ async function checkHookRoundTrip(i) {
   const fixture = loadFixture(i.bundleDir, i.agent);
   if (fixture === null) return row("UNKNOWN", D5_NO_FIXTURE_DETAIL(i.agent));
   const now = i.now ?? (() => performance.now());
-  const samples = Math.max(1, i.samples ?? D5_SAMPLES);
+  const fixed = i.samples === void 0 ? null : Math.max(1, i.samples);
+  const maxPairs = fixed ?? D5_MAX_PAIRS;
+  const minPairs = fixed ?? D5_MIN_PAIRS;
   const bareMs = i.bareMs ?? (async () => {
     const t = performance.now();
     await runProcess([process.execPath, "-e", ""], { cwd: i.bundleDir, env: i.env, signal: i.signal, timeoutMs: HOOK_TIMEOUT_MS });
@@ -48567,7 +48571,8 @@ async function checkHookRoundTrip(i) {
   });
   const hookWalls = [];
   const bareWalls = [];
-  for (let n = 0; n < samples; n++) {
+  let ms = 0;
+  for (let n = 1; n <= maxPairs; n++) {
     const start = now();
     const r = await runProcess([process.execPath, path4.join(i.bundleDir, HOOK_ENTRY_FILE), AGENT_ARG, i.agent], {
       cwd: i.bundleDir,
@@ -48579,8 +48584,9 @@ async function checkHookRoundTrip(i) {
     hookWalls.push(now() - start);
     if (!isNativeShape(r.stdout.toString("utf8"), r.exitCode, r.killed, fixture.event)) return row("FAIL", D5_SHAPE_DETAIL, D5_FIX);
     bareWalls.push(await bareMs());
+    ms = Math.max(0, Math.round(Math.min(...hookWalls) - Math.min(...bareWalls)));
+    if (n >= minPairs && ms <= HOOK_P95_MS) break;
   }
-  const ms = Math.max(0, Math.round(Math.min(...hookWalls) - Math.min(...bareWalls)));
   if (ms > HOOK_P95_MS) return row("FAIL", D5_SLOW_DETAIL(ms), D5_FIX);
   return row("PASS", DOCTOR_PASS_DETAIL);
 }
