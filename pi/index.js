@@ -11508,7 +11508,7 @@ var DECISION_OPTION_KEY = "option";
 var DECISION_LABEL_JOIN = " | ";
 var RELEASE_REPO_URL = "https://github.com/mksglu/context-mode.git";
 var RELEASE_BRANCH = "release";
-var BUNDLE_SHA = true ? "efe519b1d2f8b002ada6ef542af2df61e2abc20f" : void 0;
+var BUNDLE_SHA = true ? "fa9bffea6220e2da2a37f2568e1fa96671f5b7c7" : void 0;
 var DOCTOR_CHECK_ORDER = Object.freeze(["D1", "D2", "D3", "D4", "D5", "D5b", "D6", "D7", "D8", "D9", "D10", "D11"]);
 var DOCTOR_LABEL = Object.freeze({
   D1: "version",
@@ -19972,8 +19972,8 @@ function decisionQueries(input) {
 function pageSize(input) {
   return input.source === DECISION_SOURCE ? SEARCH_PAGE_SIZE : SEARCH_REPLY_HITS;
 }
-function page(db, q, input, scope, ctx, offset) {
-  const size = pageSize(input);
+function page(db, q, input, scope, ctx, offset, extra = 0) {
+  const size = pageSize(input) + extra;
   if (input.source === DECISION_SOURCE && q.trim() === "") {
     return ftsListSource(db, DECISION_SOURCE, scope, ctx.project, ctx.sessionId, size, offset);
   }
@@ -20022,51 +20022,76 @@ function jsonRowsReply(db, input, scope, ctx) {
   }
   return shown2 === 0 && !more ? null : reply(out.join("\n"), false);
 }
+var SMALL_SOURCE_SHARE = 0.5;
+var SOURCE_BYTES = "SELECT id, bytes_total FROM sources WHERE id IN (SELECT value FROM json_each(:ids))";
+function sourceBytes(db, ids) {
+  const out = /* @__PURE__ */ new Map();
+  if (ids.length === 0) return out;
+  for (const r of db.raw.prepare(SOURCE_BYTES).all({ ids: JSON.stringify(ids) })) {
+    out.set(Number(r.id), Number(r.bytes_total));
+  }
+  return out;
+}
 function relevance(db, given, scope, ctx) {
   const input = { ...given, queries: decisionQueries(given) };
   const offset = input.offset ?? 0;
   const size = pageSize(input);
-  const seen = /* @__PURE__ */ new Set();
-  const entries = [];
-  const full = /* @__PURE__ */ new Set();
-  input.queries.forEach((q, qi) => {
-    const hits = page(db, q, input, scope, ctx, offset);
-    if (hits.length === size) full.add(qi);
-    hits.forEach((hit, i) => {
-      const key = hit.sourceId + ":" + hit.ord;
-      if (seen.has(key)) return;
-      seen.add(key);
-      entries.push({ qi, pos: offset + i, hit });
-    });
-  });
-  if (entries.length === 0) return zeroHits(db, scope, ctx, input.source);
+  const fetched = input.queries.map((q) => page(db, q, input, scope, ctx, offset, 1));
+  const pages = fetched.map((h) => h.slice(0, size));
+  if (pages.every((p) => p.length === 0)) return zeroHits(db, scope, ctx, input.source);
   const moreLine3 = (q, pos) => "More: " + callText([q], scope, input.source, "offset:" + pos);
   let reserve = 0;
   for (const q of input.queries) reserve += bytes2(moreLine3(q, offset + size)) + 1;
+  const total = input.source === DECISION_SOURCE ? /* @__PURE__ */ new Map() : sourceBytes(db, [...new Set(pages.flat().map((h) => h.sourceId))]);
+  const spent = /* @__PURE__ */ new Map();
   const lines = [];
   const more = [];
+  const shown2 = /* @__PURE__ */ new Set();
   let used = 0;
   let stopped = false;
   input.queries.forEach((q, qi) => {
-    const mine = entries.filter((e) => e.qi === qi);
+    const hits = pages[qi];
     if (stopped) {
-      more.push(moreLine3(q, mine.length > 0 ? mine[0].pos : offset));
+      more.push(moreLine3(q, offset));
       return;
     }
     const head = "Query " + JSON.stringify(q) + ":";
     lines.push(head);
     used += bytes2(head) + 1;
-    for (const e of mine) {
-      const line = e.hit.label + " #" + e.hit.ord + ": " + e.hit.snippet;
+    const again = /* @__PURE__ */ new Map();
+    const mine = /* @__PURE__ */ new Set();
+    let cut = -1;
+    for (let i = 0; i < hits.length; i++) {
+      const hit = hits[i];
+      const key = hit.sourceId + ":" + hit.ord;
+      if (shown2.has(key)) {
+        again.set(hit.label, [...again.get(hit.label) ?? [], hit.ord]);
+        continue;
+      }
+      const line = hit.label + " #" + hit.ord + ": " + hit.snippet;
       if (used + bytes2(line) + 1 + reserve > OUTPUT_CAP) {
-        more.push(moreLine3(q, e.pos));
+        cut = offset + i;
         stopped = true;
         break;
       }
+      const room = total.get(hit.sourceId);
+      if (room !== void 0 && mine.has(hit.sourceId) && (spent.get(hit.sourceId) ?? 0) + bytes2(line) + 1 > room * SMALL_SOURCE_SHARE * (qi + 1) / input.queries.length) {
+        cut = offset + i;
+        break;
+      }
+      lines.push(line);
+      shown2.add(key);
+      used += bytes2(line) + 1;
+      spent.set(hit.sourceId, (spent.get(hit.sourceId) ?? 0) + bytes2(line) + 1);
+      mine.add(hit.sourceId);
+    }
+    if (again.size > 0) {
+      const line = "Same as above: " + [...again].map(([label, ords]) => label + " (chunk " + ords.join(",") + ")").join("; ");
       lines.push(line);
       used += bytes2(line) + 1;
     }
-    if (!stopped && full.has(qi)) more.push(moreLine3(q, offset + size));
+    if (cut >= 0) more.push(moreLine3(q, cut));
+    else if (fetched[qi].length > size) more.push(moreLine3(q, offset + size));
   });
   return reply(lines.concat(more).join("\n"), false);
 }

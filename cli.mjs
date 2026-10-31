@@ -8652,10 +8652,15 @@ function isStaleOwnPlugin(e, entry2) {
   if (n3 >= 3 && seg[n3 - 1] === "plugin.js" && seg[n3 - 2] === "opencode" && seg[n3 - 3] === "context-mode") return true;
   return n3 >= 2 && seg[n3 - 1] === "context-mode" && seg[n3 - 2] === "node_modules";
 }
-function wantedPluginList(list2, entry2) {
-  const native = list2.some(isNativeSpec);
+function wantedPluginList(list2, entry2, nativeElsewhere = false) {
+  const native = nativeElsewhere || list2.some(isNativeSpec);
   const kept = list2.filter((e) => !(native && e === entry2) && !isStaleOwnPlugin(e, entry2));
   return native || kept.includes(entry2) ? kept : [...kept, entry2];
+}
+var OC2_NATIVE_KEY = "plugins";
+function nativePluginsKey(doc) {
+  const v = isObj5(doc) ? doc[OC2_NATIVE_KEY] : void 0;
+  return Array.isArray(v) && v.some(isNativeSpec);
 }
 function pluginListIssue(h2) {
   const text2 = readOr(h2.file);
@@ -8668,7 +8673,7 @@ function pluginListIssue(h2) {
   }
   const cur = isObj5(doc) ? doc[h2.key[0]] : void 0;
   const list2 = Array.isArray(cur) ? cur : [];
-  if (list2.some(isNativeSpec) && list2.includes(h2.entry)) return `${h2.file}: context-mode loads twice (native entry and ${h2.entry}), every hook fires twice; run: context-mode setup`;
+  if ((list2.some(isNativeSpec) || nativePluginsKey(doc)) && list2.includes(h2.entry)) return `${h2.file}: context-mode loads twice (native entry and ${h2.entry}), every hook fires twice; run: context-mode setup`;
   const stale = list2.find((e) => isStaleOwnPlugin(e, h2.entry));
   if (stale !== void 0) return `${h2.file}: plugin file missing, so OpenCode never loads the hooks (${String(stale)}); run: context-mode setup`;
   return void 0;
@@ -8695,7 +8700,8 @@ function planHookInstall(row, edits, env) {
     planJsonKeys(row, edits, h2.file, fileFormat(row, h2.file), (doc) => {
       const cur = doc[h2.key[0]];
       const list2 = Array.isArray(cur) ? cur : [];
-      const want = wantedPluginList(list2, h2.entry);
+      const want = wantedPluginList(list2, h2.entry, nativePluginsKey(doc));
+      if (cur === void 0 && want.length === 0) return [];
       return [[h2.key, want.length === list2.length && want.every((e, i2) => e === list2[i2]) ? list2 : want]];
     });
   }
@@ -8758,12 +8764,14 @@ function statusOf(row, text2) {
   }
   return void 0;
 }
-function opencodeListArgs(bin, env) {
+function opencodeMajor(bin, env) {
   const r2 = runBin(bin, ["--version"], env);
   const text2 = `${r2.stdout}${r2.stderr}`;
   const digits = text2.split("").filter((c3) => c3 >= "0" && c3 <= "9" || c3 === ".").join("");
-  const major = Number(digits.split(".")[0]);
-  return major >= 2 ? ["mcp", "list", "--standalone"] : ["mcp", "list", "--pure"];
+  return Number(digits.split(".")[0]);
+}
+function opencodeListArgs(bin, env) {
+  return opencodeMajor(bin, env) >= 2 ? ["mcp", "list", "--standalone"] : ["mcp", "list", "--pure"];
 }
 function listState(row, env) {
   const l0 = row.listCommand;
@@ -8950,7 +8958,8 @@ function hookRegisteredCheck(row, env, list2) {
   const trust = h2.kind === "file" ? h2.trust : void 0;
   if (trust && edits.every((e) => e.file === trust && e.changes.every((c3) => isTrust(row, c3)))) return { name: "hook-registered", ok: false, detail: `${h2.file}: the context-mode hooks are not trusted in ${trust}; re-run setup` };
   const issue = h2.kind === "plugin-list" ? pluginListIssue(h2) : h2.kind === "file" && row.id === "kiro" ? kiroDisabledIssue(h2) : void 0;
-  return { name: "hook-registered", ok: false, detail: issue ?? `${h2.file} lacks the context-mode hook entry` };
+  const oc2 = issue === void 0 && row.id === "opencode" && h2.kind === "plugin-list" && hostBin("opencode", env).file !== void 0 && opencodeMajor("opencode", env) >= 2;
+  return { name: "hook-registered", ok: false, detail: issue ?? `${h2.file} lacks the context-mode hook entry${oc2 ? "; run: opencode plugin add context-mode@next" : ""}` };
 }
 function hookRunsCheck(row, env) {
   const root = mkdtempSync(path12.join(tmpdir2(), "cm-doctor-runs-"));
@@ -9411,7 +9420,7 @@ async function runDoctor(opts) {
         res.reason = V1_FORM_REASON;
       } else if (res.changes.length && !onlyTrust(row, res.changes) && !hasPluginIssue(row)) {
         res.status = "FAIL";
-        res.reason = NOT_SET_UP_REASON;
+        res.reason = notSetUpReason(row, res, ctx.env);
       } else {
         res.checks = await verifyRow(row, ctx);
         const bad = res.checks.filter((c3) => !c3.ok);
@@ -9425,6 +9434,12 @@ async function runDoctor(opts) {
     opts.onAgent?.(id, "done", res);
   }
   return { exitCode: agents.some((a2) => a2.status === "FAIL") ? 1 : 0, agents };
+}
+function notSetUpReason(row, res, env) {
+  const h2 = row.hookInstall;
+  const missing = row.id === "opencode" && h2.kind === "plugin-list" && res.changes.some((c3) => c3.path === h2.key[0]);
+  const oc2 = missing && hostBin("opencode", env).file !== void 0 && opencodeMajor("opencode", env) >= 2;
+  return oc2 ? `${NOT_SET_UP_REASON}, or run: opencode plugin add context-mode@next` : NOT_SET_UP_REASON;
 }
 function hasPluginIssue(row) {
   const h2 = row.hookInstall;
