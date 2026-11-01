@@ -158,7 +158,7 @@ var SQLITE_NOTADB_CODE = 26;
 var HOOK_TIMEOUT_MS = 5e3;
 var IN_PROCESS_TIMEOUT_MS = 0;
 var PROJECT_KEY_HEX_LEN = 16;
-var SCHEMA_VERSION = 5;
+var SCHEMA_VERSION = 6;
 var PROJECTS_DIR_NAME = "projects";
 var DB_FILE_NAME = "context.db";
 var GIT_DIR_NAME = ".git";
@@ -1466,12 +1466,16 @@ CREATE VIRTUAL TABLE line_units USING fts5(
   ${FTS_TOKENIZE}
 );
 `;
+var DDL_V6 = `
+UPDATE sources SET label = replace(label, char(92), '/') WHERE kind = 'path' AND instr(label, char(92)) > 0;
+`;
 var MIGRATIONS = [
   { version: 1, sql: DDL },
   { version: 2, sql: DDL_V2 },
   { version: 3, sql: DDL_V3 },
   { version: 4, sql: DDL_V4 },
-  { version: 5, sql: DDL_V5 }
+  { version: 5, sql: DDL_V5 },
+  { version: 6, sql: DDL_V6 }
 ];
 function applyMigrations(db, fromVersion) {
   if (fromVersion === SCHEMA_VERSION2) return;

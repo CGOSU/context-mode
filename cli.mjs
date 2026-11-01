@@ -1596,7 +1596,7 @@ Examples:
 };
 
 // src/cli/commands.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
+import { spawnSync as spawnSync4 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
 import { existsSync as existsSync13, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import os from "node:os";
@@ -8017,7 +8017,7 @@ function qwenHooksOff(env, home, cwd = process.cwd(), platform = process.platfor
 import { createHash } from "node:crypto";
 import { existsSync as existsSync11, realpathSync as realpathSync4 } from "node:fs";
 import path10 from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync as spawnSync2 } from "node:child_process";
 
 // src/setup/spawn-bin.ts
 import { spawnSync } from "node:child_process";
@@ -8189,6 +8189,7 @@ function codexTrustEntries(hooksFile, doc, command, env) {
   return out2;
 }
 var LIST_TIMEOUT_MS = 15e3;
+var EXIT_GRACE_MS = 5e3;
 var PLUGIN_SOURCE = "plugin";
 var TRUSTED = "trusted";
 function pluginHooksFromReply(m3, pluginId) {
@@ -8219,13 +8220,25 @@ function listPluginHooks(env, pluginId, cwd) {
     const child = spawn(f2.command, f2.args, { env, cwd, stdio: ["pipe", "pipe", "ignore"], windowsVerbatimArguments: f2.windowsVerbatimArguments, windowsHide: true });
     let buf = "";
     let done = false;
+    let exited = false;
+    let result;
+    const settle = () => {
+      clearTimeout(grace);
+      resolve(result);
+    };
+    let grace;
     const finish2 = (v) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      result = v;
       child.stdin.destroy();
-      child.kill();
-      resolve(v);
+      if (exited) {
+        settle();
+        return;
+      }
+      grace = setTimeout(settle, EXIT_GRACE_MS);
+      stopTree(child.pid, () => child.kill());
     };
     const timer = setTimeout(() => finish2(void 0), LIST_TIMEOUT_MS);
     const send = (o2) => {
@@ -8236,7 +8249,11 @@ function listPluginHooks(env, pluginId, cwd) {
       }
     };
     child.on("error", () => finish2(void 0));
-    child.on("close", () => finish2(void 0));
+    child.on("close", () => {
+      exited = true;
+      if (done) settle();
+      else finish2(void 0);
+    });
     child.stdin.on("error", () => finish2(void 0));
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (d) => {
@@ -8260,6 +8277,15 @@ function listPluginHooks(env, pluginId, cwd) {
     send({ id: 1, method: "initialize", params: { clientInfo: { name: "context-mode-setup", version: "2.0.0" } } });
   });
 }
+function stopTree(pid, kill) {
+  if (process.platform === "win32" && pid !== void 0) {
+    try {
+      spawnSync2("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", timeout: 5e3 });
+    } catch {
+    }
+  }
+  kill();
+}
 var HASH_PART_SEP = "/";
 function hookHashOf(currentHash) {
   const cut = currentHash.indexOf(HASH_PART_SEP);
@@ -8267,6 +8293,13 @@ function hookHashOf(currentHash) {
 }
 function pluginTrustEntries(hooks) {
   return hooks.filter((h2) => !h2.trusted).map((h2) => [[...TRUST_KEY, h2.key], { [HASH_FIELD]: hookHashOf(h2.hash) }]);
+}
+var CODEX_PLUGIN_ID = `${SERVER_KEY}@${SERVER_KEY}`;
+var CODEX_UNTRUSTED_FIX = "run: context-mode setup";
+function untrustedPluginHooksDetail(hooks) {
+  const bad = hooks.filter((h2) => !h2.trusted);
+  if (!bad.length) return void 0;
+  return `codex lists ${bad.length} of ${hooks.length} context-mode plugin hooks untrusted, so they do not run; ${CODEX_UNTRUSTED_FIX}`;
 }
 
 // src/setup/copilot-hooks.ts
@@ -8365,7 +8398,7 @@ function listCopilotHooks(env, file, cwd) {
 }
 
 // src/setup/engine.ts
-import { spawn as spawn3, spawnSync as spawnSync2 } from "node:child_process";
+import { spawn as spawn3, spawnSync as spawnSync3 } from "node:child_process";
 import { closeSync, existsSync as existsSync12, mkdirSync as mkdirSync3, mkdtempSync, openSync, readFileSync as readFileSync9, readSync, readdirSync as readdirSync5, realpathSync as realpathSync6, rmSync, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import path12 from "node:path";
@@ -8897,7 +8930,7 @@ function hookRound(row, env) {
   const bare = [];
   for (let i2 = 0; i2 < HOOK_SAMPLES; i2++) {
     let t2 = performance.now();
-    const r2 = spawnSync2(cmd[0], cmd.slice(1), { env, input, encoding: "utf8", timeout: VERIFY_TIMEOUT_MS, windowsHide: true });
+    const r2 = spawnSync3(cmd[0], cmd.slice(1), { env, input, encoding: "utf8", timeout: VERIFY_TIMEOUT_MS, windowsHide: true });
     wall.push(performance.now() - t2);
     if (r2.status !== 0) return { name: "hook", ok: false, detail: `hook exited ${r2.status}: ${`${r2.stderr}`.trim()}` };
     const out2 = `${r2.stdout}`.trim();
@@ -8910,7 +8943,7 @@ function hookRound(row, env) {
       if (!isObj5(j2)) return { name: "hook", ok: false, detail: `hook answer is not a JSON object: ${out2.slice(0, 200)}` };
     }
     t2 = performance.now();
-    spawnSync2(cmd[0], ["-e", ""], { env, timeout: VERIFY_TIMEOUT_MS, windowsHide: true });
+    spawnSync3(cmd[0], ["-e", ""], { env, timeout: VERIFY_TIMEOUT_MS, windowsHide: true });
     bare.push(performance.now() - t2);
   }
   const wallP95Ms = Math.round(p95(wall));
@@ -8974,7 +9007,7 @@ function hookRunsCheck(row, env) {
     const sampleEnv = { ...env, HOME: home, USERPROFILE: home };
     delete sampleEnv.CLAUDE_PROJECT_DIR;
     const cmd = row.hookRunCommand;
-    const r2 = spawnSync2(cmd[0], cmd.slice(1), { env: sampleEnv, cwd: proj, input: JSON.stringify(payload), encoding: "utf8", timeout: VERIFY_TIMEOUT_MS, windowsHide: true });
+    const r2 = spawnSync3(cmd[0], cmd.slice(1), { env: sampleEnv, cwd: proj, input: JSON.stringify(payload), encoding: "utf8", timeout: VERIFY_TIMEOUT_MS, windowsHide: true });
     const bad = sampleVerdict(row.id, effect, text2, { status: r2.status, stdout: `${r2.stdout ?? ""}`, stderr: `${r2.stderr ?? ""}` });
     return bad === null ? { name: "hook-runs", ok: true } : { name: "hook-runs", ok: false, detail: bad };
   } finally {
@@ -9145,12 +9178,11 @@ function withHookGate(checks, detail) {
   if (detail === void 0) return checks;
   return checks.map((c3) => c3.name === "hook-registered" ? { name: c3.name, ok: false, detail } : c3);
 }
-var UNTRUSTED_FIX = "run: context-mode setup";
+var UNTRUSTED_FIX = CODEX_UNTRUSTED_FIX;
 function withHookTrust(checks, hooks, dryRun) {
   if (hooks === void 0) return [...checks, { name: "hook-trust", ok: true, warn: true, detail: "codex did not report hook trust (codex app-server hooks/list)" }];
-  const bad = hooks.filter((h2) => !h2.trusted);
-  if (!bad.length || dryRun) return checks;
-  const detail = `codex lists ${bad.length} of ${hooks.length} context-mode plugin hooks untrusted, so they do not run; ${UNTRUSTED_FIX}`;
+  const detail = untrustedPluginHooksDetail(hooks);
+  if (detail === void 0 || dryRun) return checks;
   return checks.map((c3) => c3.name === "hook-registered" ? { name: c3.name, ok: false, detail } : c3);
 }
 async function copilotEnabledCheck(row, ctx) {
@@ -9671,7 +9703,7 @@ function buildIssueReport(command, res, ui) {
   return { text: redact(lines.join("\n"), ui.ctx), title };
 }
 function ghReady(env) {
-  const r2 = spawnSync3("gh", ["auth", "status"], { env, stdio: "ignore", timeout: 1e4, windowsHide: true });
+  const r2 = spawnSync4("gh", ["auth", "status"], { env, stdio: "ignore", timeout: 1e4, windowsHide: true });
   return r2.status === 0;
 }
 function issueUrl(title, body) {
@@ -9702,7 +9734,7 @@ async function report(ui, command, res, write) {
     return;
   }
   if (file && ghReady(ui.ctx.env)) {
-    const r2 = spawnSync3("gh", ["issue", "create", "--repo", ISSUE_REPO, "--title", title, "--body-file", file], { env: ui.ctx.env, encoding: "utf8", timeout: 6e4, windowsHide: true });
+    const r2 = spawnSync4("gh", ["issue", "create", "--repo", ISSUE_REPO, "--title", title, "--body-file", file], { env: ui.ctx.env, encoding: "utf8", timeout: 6e4, windowsHide: true });
     if (r2.status === 0) {
       p3.log.success(`Issue opened: ${`${r2.stdout}`.trim()}`);
       return;
@@ -9925,20 +9957,20 @@ async function upgrade(ui) {
   }
   const shell = process.platform === "win32";
   progress2(ui, `running ${install}`);
-  const r2 = spawnSync3(npm, ["i", "-g", spec], { env: ui.ctx.env, encoding: "utf8", shell, windowsHide: true });
+  const r2 = spawnSync4(npm, ["i", "-g", spec], { env: ui.ctx.env, encoding: "utf8", shell, windowsHide: true });
   if (r2.status !== 0) {
     const why = (`${r2.stderr ?? ""}`.trim().split("\n").pop() ?? "") || (r2.error?.message ?? "");
     err(`FAIL upgrade: ${install} exited ${r2.status ?? "?"}${why ? `: ${why}` : ""}. Fix: ${install}`);
     return EXIT_FAIL;
   }
-  const root = `${spawnSync3(npm, ["root", "-g"], { env: ui.ctx.env, encoding: "utf8", shell, windowsHide: true }).stdout ?? ""}`.trim();
+  const root = `${spawnSync4(npm, ["root", "-g"], { env: ui.ctx.env, encoding: "utf8", shell, windowsHide: true }).stdout ?? ""}`.trim();
   const cli = path13.join(root, "context-mode", "cli.mjs");
   if (!root || !existsSync13(cli)) {
     err(`FAIL upgrade: ${cli} not found after ${install}. Fix: ${install}`);
     return EXIT_FAIL;
   }
   progress2(ui, `running context-mode ${repairArgs.join(" ")}`);
-  const c3 = spawnSync3(process.execPath, [cli, ...repairArgs], { env: ui.ctx.env, stdio: "inherit", windowsHide: true });
+  const c3 = spawnSync4(process.execPath, [cli, ...repairArgs], { env: ui.ctx.env, stdio: "inherit", windowsHide: true });
   return c3.status ?? (c3.signal === "SIGINT" ? EXIT_SIGINT : EXIT_FAIL);
 }
 async function runCommand(cmd, args, env) {
