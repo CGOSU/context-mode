@@ -1384,29 +1384,31 @@ export function formatBatchQueryResults(
   // remains "batch" to preserve the historical behavior.
   const searchSource = scope === "global" ? undefined : source;
 
-  for (const query of queries) {
-    if (outputSize > maxOutput) {
-      sections.push(`## ${query}\n(output cap reached — use ctx_search(queries: ["${query}"]) for details)\n`);
-      continue;
-    }
-
-    const results = store.searchWithFallback(query, 3, searchSource, undefined, "exact");
-    sections.push(`## ${query}`);
-    sections.push("");
-    if (results.length > 0) {
-      for (const result of results) {
-        const snippet = extractSnippet(result.content, query, 3000, result.highlighted);
-        sections.push(`### ${result.title}`);
-        sections.push(snippet);
-        sections.push("");
-        outputSize += snippet.length + result.title.length;
+  store.withSearchBatch((search) => {
+    for (const query of queries) {
+      if (outputSize > maxOutput) {
+        sections.push(`## ${query}\n(output cap reached — use ctx_search(queries: ["${query}"]) for details)\n`);
+        continue;
       }
-      continue;
-    }
 
-    sections.push("No matching sections found.");
-    sections.push("");
-  }
+      const results = search(query, 3, searchSource, undefined, "exact");
+      sections.push(`## ${query}`);
+      sections.push("");
+      if (results.length > 0) {
+        for (const result of results) {
+          const snippet = extractSnippet(result.content, query, 3000, result.highlighted);
+          sections.push(`### ${result.title}`);
+          sections.push(snippet);
+          sections.push("");
+          outputSize += snippet.length + result.title.length;
+        }
+        continue;
+      }
+
+      sections.push("No matching sections found.");
+      sections.push("");
+    }
+  });
 
   if (scope === "global") {
     sections.push(`\n> **Scope:** Queries searched the entire persistent index (query_scope: "global").`);
@@ -1520,8 +1522,14 @@ function truncateCodeForEcho(code: string): string {
  * survives in indexed chunks (FTS5 sees the fenced block) so later
  * ctx_search hits remember what ran.
  */
-function buildExecuteEcho(language: string, code: string, path?: string): string {
+function buildExecuteEcho(
+  language: string, code: string, path?: string, clientInfo?: { name: string; version?: string },
+): string {
   const header = path ? `path=${path}\n` : "";
+  // Pi already renders the submitted args. Keep provenance, not duplicate code;
+  // never strip fences from stdout, which may itself contain source code.
+  if (clientInfo?.name === "pi-coding-agent-context-mode-bridge" ||
+      detectPlatform(clientInfo).platform === "pi") return header;
   const fenced = `\`\`\`${language}\n${truncateCodeForEcho(code)}\n\`\`\``;
   return `${header}${fenced}\n\n`;
 }
@@ -1824,7 +1832,7 @@ __cm_main().catch(e=>{console.error(e);process.exitCode=1});${background ? '\nse
       // Echo the executed source code before stdout so users can audit
       // and tooling can block command patterns (Issues #717 + #736).
       // Built from the user-supplied `code`, NOT the instrumented variant.
-      const echo = buildExecuteEcho(language, code);
+      const echo = buildExecuteEcho(language, code, undefined, server.server.getClientVersion());
 
       // Parse sandbox network metrics from stderr
       const netMatch = result.stderr?.match(/__CM_NET__:(\d+)/);
@@ -2142,7 +2150,7 @@ EXAMPLE: ctx_execute_file(path: "data.csv", language: "javascript", code: "const
 
       // Echo path + executed source code before stdout for audit/debug
       // (Issues #717 + #736).
-      const echo = buildExecuteEcho(language, code, path);
+      const echo = buildExecuteEcho(language, code, path, server.server.getClientVersion());
 
       if (result.timedOut) {
         return trackResponse("ctx_execute_file", {
@@ -2667,7 +2675,7 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
       // Determine per-query result limit based on throttle level
       const effectiveLimit = flood.softCapped
         ? 1 // after soft cap: only 1 result per query
-        : Math.min(limit, 2); // normal: max 2
+        : limit; // normal: honor the declared default and explicit limit
 
       const MAX_TOTAL = 40 * 1024; // 40KB total cap
       let totalSize = 0;
@@ -2704,57 +2712,60 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
       const configDir = _detectedAdapter?.getConfigDir() ?? resolveClaudeConfigDir();
 
       try {
-      for (const q of queryList) {
-        if (totalSize > MAX_TOTAL) {
-          sections.push(`## ${q}\n(output cap reached)\n`);
-          continue;
-        }
+        store.withSearchBatch((search) => {
+          for (const q of queryList) {
+            if (totalSize > MAX_TOTAL) {
+              sections.push(`## ${q}\n(output cap reached)\n`);
+              continue;
+            }
 
-        let results;
-        if (sort === "timeline") {
-          results = searchAllSources({
-            query: q,
-            limit: effectiveLimit,
-            store,
-            sort,
-            source,
-            contentType,
-            sessionDB: timelineDB,
-            projectDir: getProjectDir(),
-            configDir,
-            adapter: _detectedAdapter ?? undefined,
-            projectScope,
-          });
-        } else {
-          results = store.searchWithFallback(
-            q,
-            effectiveLimit,
-            source,
-            contentType,
-            "like",
-            relevanceAllowSet,
-          );
-        }
+            let results;
+            if (sort === "timeline") {
+              results = searchAllSources({
+                query: q,
+                limit: effectiveLimit,
+                store,
+                search,
+                sort,
+                source,
+                contentType,
+                sessionDB: timelineDB,
+                projectDir: getProjectDir(),
+                configDir,
+                adapter: _detectedAdapter ?? undefined,
+                projectScope,
+              });
+            } else {
+              results = search(
+                q,
+                effectiveLimit,
+                source,
+                contentType,
+                "like",
+                relevanceAllowSet,
+              );
+            }
 
-        if (results.length === 0) {
-          sections.push(`## ${q}\nNo results found.`);
-          continue;
-        }
+            if (results.length === 0) {
+              sections.push(`## ${q}\nNo results found.`);
+              continue;
+            }
 
-        const formatted = results
-          .map((r, i) => {
-            const origin = (r as any).origin || "current-session";
-            const ts = (r as any).timestamp ? (r as any).timestamp.slice(0, 16).replace("T", " ") : "";
-            const header = `--- [${origin}${ts ? " | " + ts : ""} | ${r.source}] ---`;
-            const heading = `### ${r.title}`;
-            const snippet = extractSnippet(r.content, q, 1500, r.highlighted);
-            return `${header}\n${heading}\n\n${snippet}`;
-          })
-          .join("\n\n");
+            const formatted = results
+              .map((r, i) => {
+                const origin = (r as any).origin || "current-session";
+                const ts = (r as any).timestamp ? (r as any).timestamp.slice(0, 16).replace("T", " ") : "";
+                const header = `--- [${origin}${ts ? " | " + ts : ""} | ${r.source}] ---`;
+                const heading = `### ${r.title}`;
+                const snippet = extractSnippet(r.content, q, 1500, r.highlighted);
+                return `${header}\n${heading}\n\n${snippet}`;
+              })
+              .join("\n\n");
 
-        sections.push(`## ${q}\n\n${formatted}`);
-        totalSize += formatted.length;
-      }
+            sections.push(`## ${q}\n\n${formatted}`);
+            totalSize += formatted.length;
+          }
+        });
       } finally {
         try { timelineDB?.close(); } catch {}
       }

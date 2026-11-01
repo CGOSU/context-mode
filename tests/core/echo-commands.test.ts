@@ -175,10 +175,10 @@ async function awaitRpc(
   });
 }
 
-async function initServer(proc: ChildProcess): Promise<void> {
+async function initServer(proc: ChildProcess, clientName = "echo-commands-test"): Promise<void> {
   await awaitRpc(proc, 1, {
     jsonrpc: "2.0", id: 1, method: "initialize",
-    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "echo-commands-test", version: "1.0" } },
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: clientName, version: "1.0" } },
   });
   sendRpc(proc, { jsonrpc: "2.0", method: "notifications/initialized" });
 }
@@ -221,12 +221,108 @@ describe("issue #717 — ctx_execute echoes the language + code it ran", () => {
   }, 30_000);
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// Behaviour 6 — ctx_batch_execute summary carries a "## Commands" inventory
-//               so the response itself (not just per-section echoes) lists
-//               every command the agent ran. Placed before "## Indexed
-//               Sections" per the issue templates.
-// ════════════════════════════════════════════════════════════════════════════
+// Pi already displays input arguments: only generated output belongs in its result.
+describe.each(["ctx_execute", "ctx_execute_file"])("Pi %s result payload", (tool) => {
+  let projectDir: string;
+  beforeAll(() => {
+    projectDir = mkdtempSync(join(tmpdir(), "pi-exec-result-"));
+    writeFileSync(join(projectDir, "sample.txt"), "file contents\n");
+  });
+  afterAll(() => rmSync(projectDir, { recursive: true, force: true }));
+
+  async function run(
+    code: string, extra: Record<string, unknown> = {}, recall?: string,
+    clientName = "pi-coding-agent-context-mode-bridge",
+  ) {
+    const proc = spawnServer({
+      CONTEXT_MODE_PROJECT_DIR: projectDir, PI_WORKSPACE_DIR: projectDir,
+      CLAUDE_PROJECT_DIR: projectDir,
+    });
+    try {
+      // Handshake identity takes precedence over inherited host env vars.
+      await initServer(proc, clientName);
+      const response = await awaitRpc(proc, 103, {
+        jsonrpc: "2.0", id: 103, method: "tools/call",
+        params: { name: tool, arguments: {
+          language: "javascript", code,
+          ...(tool === "ctx_execute_file" ? { path: "sample.txt" } : {}),
+          ...extra,
+        } },
+      });
+      if (recall) {
+        const found = await awaitRpc(proc, 104, {
+          jsonrpc: "2.0", id: 104, method: "tools/call",
+          params: { name: "ctx_search", arguments: { queries: [recall] } },
+        });
+        expect(found?.error).toBeUndefined();
+        expect(found?.result?.isError ?? false).toBe(false);
+        expect(found?.result?.content?.[0]?.text).toContain(`${recall} data`);
+      }
+      return response;
+    } finally {
+      proc.kill("SIGTERM");
+    }
+  }
+
+  test.each(["Pi Coding Agent", "pi-coding-agent-context-mode-bridge"])(
+    "%s omits submitted code without stripping code fences from real stdout", async (clientName) => {
+    const stdout = "```javascript\nconst actualOutput = 42;\n```\n";
+    const code = `console.log(${JSON.stringify(stdout)});`;
+    const resp = await run(code, {}, undefined, clientName);
+    expect(resp?.error).toBeUndefined();
+    expect(resp?.result?.isError ?? false).toBe(false);
+    const text = resp?.result?.content?.[0]?.text ?? "";
+    expect(text).toContain(stdout);
+    expect(text).not.toContain(code);
+    if (tool === "ctx_execute_file") expect(text).toContain("path=sample.txt");
+  }, 30_000);
+
+  test("retains non-zero exit diagnostics", async () => {
+    const resp = await run('console.error("real-execution-error"); process.exit(7);');
+    expect(resp?.result?.isError).toBe(true);
+    expect(resp?.result?.content?.[0]?.text).toContain("real-execution-error");
+  }, 30_000);
+
+  test("retains timeout failure diagnostics", async () => {
+    const resp = await run('setInterval(() => {}, 1000);', { timeout: 500 });
+    expect(resp?.result?.isError).toBe(true);
+    expect(resp?.result?.content?.[0]?.text).toMatch(/timed out/i);
+  }, 30_000);
+
+  test("preserves the existing partial-output timeout status", async () => {
+    const resp = await run('console.log("before-timeout"); setInterval(() => {}, 1000);', { timeout: 500 });
+    expect(resp?.error).toBeUndefined();
+    expect(resp?.result).toBeDefined();
+    expect(resp?.result?.isError ?? false).toBe(tool === "ctx_execute_file");
+    const text = resp?.result?.content?.[0]?.text ?? "";
+    expect(text).toMatch(/timed out/i);
+    if (tool === "ctx_execute") expect(text).toContain("before-timeout");
+  }, 30_000);
+
+  test("keeps large intent output searchable without echoing the input", async () => {
+    const code = 'console.log("# searchable-echo-result\\n" + "searchable-echo-result data\\n".repeat(800));';
+    const resp = await run(code, { intent: "searchable-echo-result" }, "searchable-echo-result");
+    expect(resp?.error).toBeUndefined();
+    expect(resp?.result?.isError ?? false).toBe(false);
+    const text = resp?.result?.content?.[0]?.text ?? "";
+    expect(text).toContain("searchable-echo-result");
+    expect(text).toContain("ctx_search");
+    expect(text).not.toContain(code);
+  }, 30_000);
+  test("auto-indexes large stdout and preserves its source without echoing code", async () => {
+    const code = 'console.log("# autoindex-echo-result\\n" + "autoindex-echo-result data\\n".repeat(6000));';
+    const resp = await run(code, {}, "autoindex-echo-result");
+    expect(resp?.error).toBeUndefined();
+    expect(resp?.result?.isError ?? false).toBe(false);
+    const text = resp?.result?.content?.[0]?.text ?? "";
+    expect(text).toContain(tool === "ctx_execute_file" ? "file:sample.txt" : "execute:javascript");
+    expect(text).toContain("ctx_search");
+    expect(text).not.toContain(code);
+    expect(text.length).toBeLessThan(100_000);
+  }, 30_000);
+});
+
+// Batch output retains its Commands inventory for all hosts.
 describe("issue #736 — ctx_batch_execute summary includes a Commands inventory", () => {
   let projectDir: string;
   beforeAll(() => {

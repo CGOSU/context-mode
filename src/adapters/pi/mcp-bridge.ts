@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { detectRuntimes } from "../../runtime.js";
 import { foreignWorkspaceEnv, foreignIdentificationEnv } from "../detect.js";
+import { piToolMetadata } from "./tool-metadata.js";
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -901,10 +902,9 @@ export interface BridgeHandle {
 
 /**
  * Spawn the MCP server and register each of its tools with Pi via
- * `pi.registerTool()`. The same JSON Schema returned by `tools/list` is
- * passed straight through as `parameters` — TypeBox emits JSON-Schema
- * compatible objects, so any Pi runtime that validates JSON Schema
- * accepts this shape (verified against pi 0.73.x).
+ * `pi.registerTool()`. Pi-only metadata shortens descriptions while preserving
+ * the validation schema returned by `tools/list`. TypeBox emits JSON-Schema
+ * compatible objects, so Pi accepts this shape (verified against pi 0.73.x).
  *
  * Errors during MCP `tools/call` are translated to a `throw` from the
  * `execute()` callback — Pi's contract is "throw to mark the tool call
@@ -1023,12 +1023,7 @@ export async function bootstrapMCPTools(
     pi.registerTool({
       name: tool.name,
       label: tool.name,
-      description: tool.description ?? "",
-      // MCP tools/list returns JSON Schema; Pi validates against JSON
-      // Schema (TypeBox is just JSON Schema with extra Symbol metadata
-      // for type inference). Empty-object fallback keeps tools that
-      // declare no parameters callable.
-      parameters: tool.inputSchema ?? { type: "object", properties: {} },
+      ...piToolMetadata(tool),
       renderCall: createContextModeCallRenderer(tool.name),
       renderResult: createContextModeResultRenderer(tool.name),
       async execute(_toolCallId, params) {

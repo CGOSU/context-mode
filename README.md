@@ -1041,6 +1041,8 @@ Full configs: [`configs/kiro/mcp.json`](configs/kiro/mcp.json) | [`configs/kiro/
 
 **Verify:** In a Pi session, type `ctx stats`. Context-mode tools should appear and respond.
 
+**Pi output:** `ctx_execute` and `ctx_execute_file` omit the submitted code from their results because Pi already displays tool arguments. Sandbox output and errors are unchanged; other clients retain their existing response format.
+
 **Routing:** Automatic. The extension registers all key lifecycle events (`tool_call`, `tool_result`, `session_start`, `session_before_compact`), providing full session continuity and routing enforcement.
 
 </details>
@@ -1139,7 +1141,7 @@ If the SQLite health check fails, run `ctx doctor`, confirm `node --version` is 
 | `ctx_execute` | Run code in 12 languages. Only stdout enters context. | 56 KB → 299 B |
 | `ctx_execute_file` | Process files in sandbox. Raw content never leaves. | 45 KB → 155 B |
 | `ctx_index` | Chunk markdown into FTS5 with BM25 ranking. | 60 KB → 40 B |
-| `ctx_search` | Query indexed content with multiple queries in one call. | On-demand retrieval |
+| `ctx_search` | Query indexed content with multiple queries in one call; returns up to 3 results per query by default. Pass `limit` for more, subject to the response budget. | On-demand retrieval |
 | `ctx_fetch_and_index` | Fetch URL, chunk and index. Cache reuses content within TTL (default 24h, override per-call with `ttl: <ms>`). `ttl: 0` or `force: true` to bypass. Pass `requests: [{url, source}, ...]` + `concurrency: 1-8` for parallel multi-URL. | 60 KB → 40 B |
 | `ctx_stats` | Show context savings, call counts, and session statistics. | — |
 | `ctx_doctor` | Diagnose installation: runtimes, hooks, FTS5, versions. | — |

@@ -1337,6 +1337,29 @@ export class ContentStore {
 
   // ── Unified Fallback Search ──
 
+  /**
+   * Share one file refresh across a synchronous request's searches. The callback
+   * receives the normal search contract, not a persistent skip-refresh flag.
+   * Calls made after it returns (or throws) resume normal freshness checks.
+   */
+  withSearchBatch<T>(run: (search: ContentStore["searchWithFallback"]) => T): T {
+    let active = true;
+    let refreshed = false;
+    const search: ContentStore["searchWithFallback"] = (...args) => {
+      if (!active) return this.searchWithFallback(...args);
+      if (!refreshed) {
+        this.#refreshStaleSources();
+        refreshed = true;
+      }
+      return this.#searchRefreshed(...args);
+    };
+    try {
+      return run(search);
+    } finally {
+      active = false;
+    }
+  }
+
   searchWithFallback(
     query: string,
     limit: number = 3,
@@ -1345,22 +1368,35 @@ export class ContentStore {
     sourceMatchMode: SourceMatchMode = "like",
     sessionIdAllowSet?: Set<string>,
   ): SearchResult[] {
-    // Step 0: Auto-refresh stale file-backed sources before searching
     this.#refreshStaleSources();
+    return this.#searchRefreshed(query, limit, source, contentType, sourceMatchMode, sessionIdAllowSet);
+  }
 
+  #searchRefreshed(
+    query: string,
+    limit: number = 3,
+    source?: string,
+    contentType?: "code" | "prose",
+    sourceMatchMode: SourceMatchMode = "like",
+    sessionIdAllowSet?: Set<string>,
+  ): SearchResult[] {
     // When a session-id allow-set is in play (issue #737 project filter),
     // fetch a larger candidate pool from the FTS5 layers so the post-filter
     // can still deliver `limit` matches even if many candidates are excluded.
     // The cap is bounded — even at the largest installs the chunk count
     // dwarfs `limit * 8`, and the surplus is dropped on the post-filter.
-    const fetchLimit = sessionIdAllowSet ? Math.max(limit * 8, 40) : limit;
+    // Recall beyond the output budget so title/proximity reranking can rescue
+    // candidates below the initial RRF cutoff. Bound the extra work, without
+    // reducing an explicitly larger output limit or the project-filter pool.
+    const candidateLimit = Math.max(limit, Math.min(100, Math.max(20, limit * 4)));
+    const fetchLimit = sessionIdAllowSet ? Math.max(candidateLimit, limit * 8, 40) : candidateLimit;
     const sessionFilter = this.#makeSessionFilter(sessionIdAllowSet);
 
     // Step 1: RRF fusion (porter OR + trigram OR → merge)
     const rrfResults = this.#rrfSearch(query, fetchLimit, source, contentType, sourceMatchMode);
     const rrfFiltered = sessionFilter ? rrfResults.filter(sessionFilter) : rrfResults;
     if (rrfFiltered.length > 0) {
-      const reranked = this.#applyProximityReranking(rrfFiltered.slice(0, limit), query);
+      const reranked = this.#applyProximityReranking(rrfFiltered, query).slice(0, limit);
       return reranked.map((r) => ({ ...r, matchLayer: "rrf" as const }));
     }
 
@@ -1380,7 +1416,7 @@ export class ContentStore {
       const fuzzyResults = this.#rrfSearch(correctedQuery, fetchLimit, source, contentType, sourceMatchMode);
       const fuzzyFiltered = sessionFilter ? fuzzyResults.filter(sessionFilter) : fuzzyResults;
       if (fuzzyFiltered.length > 0) {
-        const reranked = this.#applyProximityReranking(fuzzyFiltered.slice(0, limit), correctedQuery);
+        const reranked = this.#applyProximityReranking(fuzzyFiltered, correctedQuery).slice(0, limit);
         return reranked.map((r) => ({ ...r, matchLayer: "rrf-fuzzy" as const }));
       }
     }

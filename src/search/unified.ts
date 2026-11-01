@@ -32,6 +32,8 @@ export interface SearchAllSourcesOpts {
   query: string;
   limit: number;
   store: ContentStore;
+  /** Request-local search supplied by ContentStore.withSearchBatch. */
+  search?: ContentStore["searchWithFallback"];
   sort?: "relevance" | "timeline";
   source?: string;
   contentType?: "code" | "prose";
@@ -104,7 +106,7 @@ export function searchAllSources(opts: SearchAllSourcesOpts): UnifiedSearchResul
 
   // ── Source 1: ContentStore (always, both modes) ──
   try {
-    const storeResults = store.searchWithFallback(
+    const storeResults = (opts.search ?? store.searchWithFallback.bind(store))(
       query,
       limit,
       source,
