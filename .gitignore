@@ -1,5 +1,11 @@
 node_modules/
-build/
+# Ship the standalone Pi entry so Git installs need no TypeScript build.
+/build/*
+!/build/adapters/
+/build/adapters/*
+!/build/adapters/pi/
+/build/adapters/pi/*
+!/build/adapters/pi/extension.js
 packages/*/dist/
 *.tsbuildinfo
 .DS_Store

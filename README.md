@@ -1015,6 +1015,8 @@ Full configs: [`configs/kiro/mcp.json`](configs/kiro/mcp.json) | [`configs/kiro/
    pi install npm:context-mode
    ```
 
+   The Pi extension entry is shipped as a standalone bundle in the package and repository, so installing it does not require TypeScript, development dependencies, or a local build. Maintainers regenerate it with `npm run build`; CI verifies and updates the tracked bundle.
+
    Alternative — add it manually to `~/.pi/agent/settings.json` (or `.pi/settings.json` for project-level):
 
    ```json
