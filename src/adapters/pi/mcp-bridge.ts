@@ -771,6 +771,7 @@ export interface PiToolRegistration {
   label: string;
   description: string;
   parameters: unknown;
+  exposure?: "direct" | "deferred";
   renderCall?: (
     args: unknown,
     theme: PiRenderTheme,
@@ -794,6 +795,8 @@ export interface PiToolRegistration {
 
 export interface PiLikeAPI {
   registerTool: (tool: PiToolRegistration) => void;
+  getActiveTools?: () => string[];
+  getAllTools?: () => Array<{ name: string; reachesTools?: unknown }>;
   /**
    * Pi's rotating file logger (`~/.omp/logs/`). Pi runs a raw-mode TUI that
    * owns the terminal, so an in-process extension MUST NOT write to
@@ -1018,12 +1021,22 @@ export async function bootstrapMCPTools(
 
   const tools = await client.listTools();
   const registered: string[] = [];
+  // Decide once at bootstrap: never hide tools on hosts without an active
+  // discovery orchestrator. Merely having an inactive loader is insufficient.
+  const activeTools = pi.getActiveTools?.() ?? [];
+  const catalog = pi.getAllTools?.() ?? [];
+  const canDiscover = catalog.some((tool) =>
+    (tool.name === "codemode" || tool.name === "tool_search") &&
+    activeTools.includes(tool.name) && typeof tool.reachesTools === "function",
+  );
+  const maintenanceTools = new Set(["ctx_stats", "ctx_doctor", "ctx_upgrade", "ctx_purge", "ctx_insight"]);
 
   for (const tool of tools) {
     pi.registerTool({
       name: tool.name,
       label: tool.name,
       ...piToolMetadata(tool),
+      exposure: canDiscover && maintenanceTools.has(tool.name) ? "deferred" : "direct",
       renderCall: createContextModeCallRenderer(tool.name),
       renderResult: createContextModeResultRenderer(tool.name),
       async execute(_toolCallId, params) {

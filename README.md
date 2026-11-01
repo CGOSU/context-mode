@@ -1025,25 +1025,17 @@ Full configs: [`configs/kiro/mcp.json`](configs/kiro/mcp.json) | [`configs/kiro/
    }
    ```
 
-3. Add to `~/.pi/agent/mcp.json` (or `.pi/mcp.json` for project-level):
+3. Restart Pi.
 
-   ```json
-   {
-     "mcpServers": {
-       "context-mode": {
-         "command": "context-mode"
-       }
-     }
-   }
-   ```
-
-4. Restart Pi.
+   The Pi extension starts its bundled MCP server and registers the `ctx_*` tools itself. Do **not** also add `context-mode` to Pi's `mcp.json`; configuring both creates duplicate tools.
 
 **Verify:** In a Pi session, type `ctx stats`. Context-mode tools should appear and respond.
 
 **Pi output:** `ctx_execute` and `ctx_execute_file` omit the submitted code from their results because Pi already displays tool arguments. Sandbox output and errors are unchanged; other clients retain their existing response format.
 
 **Routing:** Automatic. The extension registers all key lifecycle events (`tool_call`, `tool_result`, `session_start`, `session_before_compact`), providing full session continuity and routing enforcement.
+
+**Tool discovery:** When Pi has an active `codemode` or `tool_search` orchestrator, the six frequently used tools (`ctx_execute`, `ctx_execute_file`, `ctx_index`, `ctx_search`, `ctx_fetch_and_index`, `ctx_batch_execute`) stay directly visible. `ctx_stats`, `ctx_doctor`, `ctx_upgrade`, `ctx_purge`, and `ctx_insight` remain available through on-demand discovery. If no active discovery tool is available, all tools remain directly visible. No tool is removed.
 
 </details>
 
