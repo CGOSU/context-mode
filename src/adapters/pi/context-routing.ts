@@ -1,13 +1,7 @@
 /** One source for the Pi routing hint and its request-local duplicate check. */
 export const PI_ROUTING_ANCHOR =
-  "context-mode active. Choose tools by task; there is no fixed tool hierarchy. " +
-  "Locate unfamiliar code → graph_locate/graph_inspect when available. " +
-  "Read files before editing → read; modify files → edit/write. " +
-  "Analyze large files without editing → ctx_execute_file. " +
-  "Large logs/test output → ctx_execute. Multi-command research with large output → ctx_batch_execute. " +
-  "Simple reads and short commands → native tools; context-mode is optional. " +
-  "Web pages → ctx_fetch_and_index then ctx_search. Index docs → ctx_index. " +
-  "Stats → ctx_stats. Doctor → ctx_doctor. Upgrade → ctx_upgrade. Purge → ctx_purge.";
+  "context-mode active. Use native tools for ordinary code work and short commands; " +
+  "use ctx_* for large output and indexed knowledge. See the context-mode Skill for tool selection.";
 
 function startsWithRouting(value: unknown): value is string {
   return typeof value === "string" &&

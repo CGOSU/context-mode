@@ -1003,19 +1003,13 @@ Full configs: [`configs/kiro/mcp.json`](configs/kiro/mcp.json) | [`configs/kiro/
 
 **Install:**
 
-1. Install context-mode globally:
-
-   ```bash
-   npm install -g context-mode
-   ```
-
-2. Install the package into Pi:
+1. Install the package into Pi:
 
    ```bash
    pi install npm:context-mode
    ```
 
-   The Pi extension entry is shipped as a standalone bundle in the package and repository, so installing it does not require TypeScript, development dependencies, or a local build. Maintainers regenerate it with `npm run build`; CI verifies and updates the tracked bundle.
+   This package provides the Pi extension, its Pi-specific routing skill, and the management skills. It ships a standalone extension bundle, so normal installation does not require TypeScript, development dependencies, or a local build. A separate global `npm install -g context-mode` is only needed if you also want the standalone CLI.
 
    Alternative — add it manually to `~/.pi/agent/settings.json` (or `.pi/settings.json` for project-level):
 
@@ -1025,15 +1019,15 @@ Full configs: [`configs/kiro/mcp.json`](configs/kiro/mcp.json) | [`configs/kiro/
    }
    ```
 
-3. Restart Pi.
+2. Restart Pi.
 
-   The Pi extension starts its bundled MCP server and registers the `ctx_*` tools itself. Do **not** also add `context-mode` to Pi's `mcp.json`; configuring both creates duplicate tools.
+   The extension starts its bundled MCP server and registers the `ctx_*` tools itself. Do **not** also add `context-mode` to Pi's `mcp.json`, or load the same checkout as a local package alongside the installed package; either creates a second registration path.
 
 **Verify:** In a Pi session, type `ctx stats`. Context-mode tools should appear and respond.
 
 **Pi output:** `ctx_execute` and `ctx_execute_file` omit the submitted code from their results because Pi already displays tool arguments. Sandbox output and errors are unchanged; other clients retain their existing response format.
 
-**Routing:** Automatic. The extension registers all key lifecycle events (`tool_call`, `tool_result`, `session_start`, `session_before_compact`), providing full session continuity and routing enforcement.
+**Routing and continuity:** The extension records tool/session events and resumes compacted-session context. A short routing anchor is added per turn; detailed tool choice comes from the Pi-specific skill only when selected. The `tool_call` hook blocks inline HTTP patterns, while routine file work and short commands remain native-tool tasks.
 
 **Tool discovery:** When Pi has an active `codemode` or `tool_search` orchestrator, the six frequently used tools (`ctx_execute`, `ctx_execute_file`, `ctx_index`, `ctx_search`, `ctx_fetch_and_index`, `ctx_batch_execute`) stay directly visible. `ctx_stats`, `ctx_doctor`, `ctx_upgrade`, `ctx_purge`, and `ctx_insight` remain available through on-demand discovery. If no active discovery tool is available, all tools remain directly visible. No tool is removed.
 
@@ -1387,7 +1381,7 @@ Hooks intercept tool calls programmatically — they can block dangerous command
 | Antigravity CLI (`agy`) | Bounded | routing rule + skill ([`rules`](configs/antigravity-cli/rules/context-mode.md), [`skill`](configs/antigravity-cli/skills/context-mode/SKILL.md)) | bounded Bash/Read/Grep/WebFetch enforcement | ~60% saved |
 | Kiro | Yes | [`KIRO.md`](configs/kiro/KIRO.md) | **~98% saved** | ~60% saved |
 | Zed | -- | [`AGENTS.md`](configs/zed/AGENTS.md) | -- | ~60% saved |
-| Pi | ✓ | [`AGENTS.md`](configs/pi/AGENTS.md) | **~98% saved** | ~60% saved |
+| Pi | ✓ | [Pi package Skill](configs/pi/skills/context-mode/SKILL.md) | **~98% saved** | ~60% saved |
 | OMP | Plugin | [`SYSTEM.md`](configs/omp/SYSTEM.md) | **~98% saved** | ~60% saved |
 
 Without hooks, one unrouted `curl` or Playwright snapshot can dump 56 KB into context — wiping out an entire session's worth of savings.

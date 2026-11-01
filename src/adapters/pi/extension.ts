@@ -651,11 +651,8 @@ export default function piExtension(pi: any): void {
       const parts: string[] = [];
       if (existingPrompt) parts.push(existingPrompt);
 
-      // Pi-1: Lightweight routing anchor — 7KB routing block is too heavy
-      // for Pi's context budget. Tool descriptions from pi.registerTool()
-      // already tell the model what each tool does. This anchor gives the
-      // deliberate choice (which tool for which scenario) without the full
-      // block/redirect/memory/tool-selection hierarchy.
+      // Keep only a small routing reminder here. The Pi-specific Skill is
+      // the detailed tool-selection source; tool descriptions carry API usage.
       parts.push(PI_ROUTING_ANCHOR);
 
       // Pi-3 + Pi-4: Always build active_memory (not just post-compact),

@@ -31,7 +31,6 @@ export const TARGETS = [
   ".openclaw-plugin/openclaw.plugin.json",
   ".openclaw-plugin/package.json",
   "openclaw.plugin.json",
-  ".pi/extensions/context-mode/package.json",
   // Antigravity CLI (agy) plugin bundle manifest — agy installs it via
   // `agy plugin install configs/antigravity-cli`. Without this entry it would
   // freeze at its pinned version on the next bump (cf. the .cursor-plugin

@@ -64,13 +64,18 @@ npm version patch
 This single command does ALL of the following automatically:
 1. Bumps `package.json` version (e.g., 1.0.56 → 1.0.57)
 2. Triggers `version` lifecycle hook → runs `scripts/version-sync.mjs`
-3. `version-sync.mjs` syncs version to ALL 6 manifest files:
+3. `version-sync.mjs` syncs the versioned manifests listed in `scripts/version-sync.mjs` (currently nine):
    - `.claude-plugin/plugin.json`
    - `.claude-plugin/marketplace.json`
+   - `.cursor-plugin/plugin.json`
+   - `.codex-plugin/plugin.json`
    - `.openclaw-plugin/openclaw.plugin.json`
    - `.openclaw-plugin/package.json`
    - `openclaw.plugin.json`
-   - `.pi/extensions/context-mode/package.json`
+   - `configs/antigravity-cli/plugin.json`
+   - `configs/copilot-cli/.github/plugin/plugin.json`
+
+   Pi's package manifest no longer includes a repository-local `.pi/extensions/` copy; `package.json` is the sole Pi package entry.
 4. Stages the manifest files via `git add`
 5. Creates a git commit and `v{VERSION}` tag
 

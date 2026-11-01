@@ -366,21 +366,30 @@ If you genuinely need to nudge the model on style for a specific use case, do it
 
 ## For Pi developers
 
-context-mode works on Pi now. The extension injects routing rules, registers
-ctx_* tools through the MCP bridge, and the lean `configs/pi/AGENTS.md` keeps
-context budget tight.
+The Pi package is the canonical loader: its manifest declares the bundled
+extension and Pi-specific skill. The extension registers `ctx_*` tools through
+its MCP bridge and records session events; the skill supplies detailed
+on-demand tool-selection guidance. A short routing anchor is added per turn.
 
-**First-time setup:** If you open this project in Pi before running `npm install`
-and `npm run build`, you will see errors. That's normal — the extension needs
-the compiled server bundle. Run the build once and restart.
+**Local development:** Run `npm install` and `npm run build:pi` to generate the
+server and Pi extension bundles. The repository no longer auto-loads the same
+extension from `.pi/extensions/`. To test the checkout, use Pi's one-invocation
+local package option (`pi -e .`) only after disabling/removing the installed
+context-mode package from personal or project settings; otherwise Pi can load
+two copies from different package sources. Restore the normal package setting
+afterward if needed.
 
-- If you use Pi: remove `CLAUDE.md` from your project root. Pi.dev reads both
-  CLAUDE.md and AGENTS.md, burning double context on duplicated routing
-  instructions the extension already injects.
-- Use `ctx_search` to recall decisions, errors, and blockers from prior
-  sessions instead of re-reading raw files.
+For normal use, install `npm:context-mode` through Pi and do not also configure
+a `context-mode` entry in Pi's `mcp.json`. No `CLAUDE.md` removal is required
+for this integration; keep project instructions specific and avoid copying the
+same lengthy context-mode tool rules into multiple files.
+
+- Use `ctx_search` to recall indexed decisions, errors, and blockers rather
+  than re-reading raw files.
 - Use `ctx_insight` for personal analytics — session activity, tool usage,
-  error rate, project focus.
+  error rate, and project focus.
+- If a rebuilt extension still appears stale after `/reload`, fully restart Pi;
+  see the jiti reload note in [`docs/pitfalls.md`](docs/pitfalls.md).
 
 For the full local dev workflow, build commands, and test instructions, see
 [the contributing guide above](#contributing-to-context-mode).
@@ -417,6 +426,7 @@ Required information:
 | Run diagnostics | `bash scripts/ctx-debug.sh` |
 | See background steps | `Ctrl+O` |
 | Kill cached server | `pkill -f "context-mode.*start.mjs"` |
-| Rebuild after changes | `npm run build` |
+| Rebuild all host artifacts | `npm run build` |
+| Build and verify Pi artifacts only | `npm run build:pi` |
 | Run all tests | `npm test` |
 | Watch mode | `npm run test:watch` |

@@ -1,3 +1,2 @@
-# context-mode is active
-Use `ctx_*` tools. The extension injects routing rules — follow them.
-Note for Pi users: if this project also has CLAUDE.md, Pi.dev reads both files and duplicates routing instructions in context — remove one.
+# context-mode
+Use `ctx_*` tools for large or unbounded output, batch research, and indexed knowledge. Prefer Pi's native tools for ordinary code work and short, predictable commands. The `context-mode` Pi skill contains the detailed tool-selection guidance. Do not configure a separate `context-mode` MCP server when the Pi package is installed.
