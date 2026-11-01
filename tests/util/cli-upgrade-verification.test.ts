@@ -197,7 +197,7 @@ describe("cli.ts upgrade() marketplace post-pull assertion (v1.0.114 hotfix)", (
     // the assertion start to end of upgrade body capture so we cover both
     // the warn-string flow and any catch-block fallback.
     const assertIdx = upgradeBody.indexOf("marketplace post-pull assertion");
-    const block = upgradeBody.slice(assertIdx, assertIdx + 2000);
+    const block = upgradeBody.slice(assertIdx, upgradeBody.indexOf("// Install production deps", assertIdx));
     expect(block).toMatch(/p\.log\.warn/);
     expect(block).not.toMatch(/throw new Error/);
   });

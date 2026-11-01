@@ -33,11 +33,11 @@ echo "→ context-mode plugin installer"
 echo "  plugin root : $PLUGIN_ROOT"
 echo "  openclaw    : $OPENCLAW_STATE_DIR"
 
-# 1. Build TypeScript + rebuild native bindings for system Node
+# 1. Build TypeScript and verify SQLite without rebuilding native code
 echo "→ building..."
 npm --prefix "$PLUGIN_ROOT" install --silent
 npm --prefix "$PLUGIN_ROOT" run build
-npm --prefix "$PLUGIN_ROOT" rebuild better-sqlite3
+node "$PLUGIN_ROOT/hooks/ensure-deps.mjs"
 
 # 2. Create global extension dir (real directory — OpenClaw does NOT follow dir symlinks)
 echo "→ installing extension into $EXT_DIR..."

@@ -31,6 +31,8 @@ beforeAll(() => {
 
   // Copy hooks directory
   cpSync(join(PROJECT_ROOT, "hooks"), join(fakePluginDir, "hooks"), { recursive: true });
+  // The published hooks depend on the shipped SQLite capability probe.
+  cpSync(join(PROJECT_ROOT, "scripts"), join(fakePluginDir, "scripts"), { recursive: true });
 
   // Symlink node_modules (needed for better-sqlite3, too large to copy)
   if (existsSync(join(PROJECT_ROOT, "node_modules"))) {
@@ -132,7 +134,7 @@ describe("Issue #117 — Session hooks without build/session/", () => {
       CODEX_PROJECT_DIR: fakeProjectDir,
     });
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr).toBe(0);
     const dbFiles = getCodexDBFiles();
     expect(dbFiles.length).toBeGreaterThan(0);
 

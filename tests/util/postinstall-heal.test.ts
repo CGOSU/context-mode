@@ -32,7 +32,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
 const REPO_POSTINSTALL = resolve(REPO_ROOT, "scripts", "postinstall.mjs");
 const REPO_HEAL_IP = resolve(REPO_ROOT, "scripts", "heal-installed-plugins.mjs");
-const REPO_HEAL_SQLITE3 = resolve(REPO_ROOT, "scripts", "heal-better-sqlite3.mjs");
+const REPO_HEAL_SQLITE3 = resolve(REPO_ROOT, "scripts", "sqlite-health.mjs");
 const KEY = "context-mode@context-mode";
 
 /**
@@ -59,7 +59,7 @@ function stagePostinstallPackage(): {
   mkdirSync(hooksDir, { recursive: true });
   copyFileSync(REPO_POSTINSTALL, join(scriptsDir, "postinstall.mjs"));
   copyFileSync(REPO_HEAL_IP, join(scriptsDir, "heal-installed-plugins.mjs"));
-  copyFileSync(REPO_HEAL_SQLITE3, join(scriptsDir, "heal-better-sqlite3.mjs"));
+  copyFileSync(REPO_HEAL_SQLITE3, join(scriptsDir, "sqlite-health.mjs"));
   // postinstall imports ../hooks/normalize-hooks.mjs — provide a no-op stub
   // so the import does not crash. Real postinstall wraps the import in
   // try/catch so even a missing file is fine, but copying a stub keeps the
@@ -264,7 +264,7 @@ describe("postinstall — /ctx-upgrade tmpdir staging guard", () => {
     mkdirSync(hooksDir, { recursive: true });
     copyFileSync(REPO_POSTINSTALL, join(scriptsDir, "postinstall.mjs"));
     copyFileSync(REPO_HEAL_IP, join(scriptsDir, "heal-installed-plugins.mjs"));
-    copyFileSync(REPO_HEAL_SQLITE3, join(scriptsDir, "heal-better-sqlite3.mjs"));
+    copyFileSync(REPO_HEAL_SQLITE3, join(scriptsDir, "sqlite-health.mjs"));
     // Use the REAL normalize-hooks.mjs so we can detect a (buggy) mutation.
     copyFileSync(
       resolve(REPO_ROOT, "hooks", "normalize-hooks.mjs"),

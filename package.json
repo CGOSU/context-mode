@@ -73,6 +73,7 @@
     "start.mjs",
     "scripts/postinstall.mjs",
     "scripts/heal-better-sqlite3.mjs",
+    "scripts/sqlite-health.mjs",
     "scripts/heal-installed-plugins.mjs",
     "scripts/plugin-cache-integrity.mjs",
     "README.md",
@@ -104,21 +105,21 @@
   "dependencies": {
     "@clack/prompts": "^1.0.1",
     "@mixmark-io/domino": "^2.2.0",
-    "@modelcontextprotocol/sdk": "^1.26.0",
-    "better-sqlite3": "^12.6.2",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "better-sqlite3": "13.0.3",
     "picocolors": "^1.1.1",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2",
-    "zod": "^3.25.0"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.19.11",
     "@types/turndown": "^5.0.5",
-    "esbuild": "^0.27.3",
-    "tsx": "^4.21.0",
+    "esbuild": "0.28.2",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.0",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.12"
   },
   "packageManager": "pnpm@10.23.0+sha512.21c4e5698002ade97e4efe8b8b4a89a8de3c85a37919f957e7a0f30f38fbc5bbdd05980ffe29179b2fb6e6e691242e098d945d1601772cad0fef5fb6411e2a4b",
   "engines": {

@@ -32,7 +32,6 @@ import { buildResumeSnapshot } from "../../session/snapshot.js";
 import type { SessionEvent } from "../../types.js";
 import { AdapterPlatformType, OpenCodeAdapter } from "./index.js";
 import { PLATFORM_ENV_VARS } from "../detect.js";
-import { zod3ShapeToV4 } from "./zod3tov4.js";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -420,10 +419,9 @@ async function createContextModePlugin(ctx: PluginContext) {
             ? (inputSchema._def.shape as () => unknown)()
             : {};
 
-      // Both KiloCode and recent OpenCode bundle Zod v4 in-host; v3 schemas
-      // crash with `n._zod.def` undefined. Gate widened from kilo-only (#632)
-      // because every consumer of this file is an OpenCode-family host.
-      const argsForHost = zod3ShapeToV4(shape as Record<string, unknown>);
+      // Server and hosts share native Zod v4 schemas; preserve preprocessing,
+      // defaults and refinements without a lossy compatibility conversion.
+      const argsForHost = shape as Record<string, unknown>;
 
       tools[registered.name] = {
         description: String(config.description ?? ""),

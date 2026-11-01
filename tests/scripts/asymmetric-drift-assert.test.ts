@@ -144,9 +144,12 @@ describe("Issue #531 — asymmetric-drift invariant", () => {
       r.status,
       `npm pack failed: status=${String(r.status)} signal=${String(r.signal)} error=${spawnErr} stderr=${String(r.stderr)} stdout=${String(r.stdout)}`,
     ).toBe(0);
-    const pack = JSON.parse(r.stdout) as Array<{ files: Array<{ path: string }> }>;
-    const files = new Set(pack[0]?.files?.map((f) => f.path) ?? []);
+    // npm 12 keys pack results by package name; older npm returns an array.
+    const pack = JSON.parse(r.stdout) as Record<string, { files: Array<{ path: string }> }> | Array<{ files: Array<{ path: string }> }>;
+    const entry = Array.isArray(pack) ? pack[0] : pack["context-mode"];
+    const files = new Set(entry?.files?.map((f) => f.path) ?? []);
     expect(files).toContain(".claude-plugin/plugin.json");
+    expect(files).toContain("scripts/sqlite-health.mjs");
     for (const rel of REQUIRED_PLUGIN_RUNTIME_FILES) {
       expect(files).toContain(rel);
     }
@@ -455,8 +458,7 @@ describe("Issue #531 — asymmetric-drift invariant", () => {
 
       // Copy the live postinstall + normalize-hooks (the modules that
       // implement section 4 — the actual code under test). Stub out the
-      // heal-* modules with no-ops so we don't pay for prebuild-install
-      // downloads (~20s, blows past CI's 30s budget) and registry walks.
+      // registry heal modules and SQLite probe: this test only checks hook normalization.
       // We're testing the GUARD on section 4, not the heal logic itself,
       // so the heals being live adds nothing and removes determinism.
       cpSync(
@@ -468,8 +470,8 @@ describe("Issue #531 — asymmetric-drift invariant", () => {
         join(scratch, "hooks", "normalize-hooks.mjs"),
       );
       writeFileSync(
-        join(scratch, "scripts", "heal-better-sqlite3.mjs"),
-        "export function healBetterSqlite3Binding() { /* stub */ }\n",
+        join(scratch, "scripts", "sqlite-health.mjs"),
+        "export function checkSqliteRuntime() { return { ok: true, backend: 'test' }; }\nexport function sqliteRemediation() { return 'test'; }\n",
       );
       writeFileSync(
         join(scratch, "scripts", "heal-installed-plugins.mjs"),

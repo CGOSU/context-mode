@@ -13,7 +13,7 @@ import { execSync } from "node:child_process";
 import { dirname, resolve, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { healBetterSqlite3Binding } from "./heal-better-sqlite3.mjs";
+import { checkSqliteRuntime, sqliteRemediation } from "./sqlite-health.mjs";
 import { healInstalledPlugins, healSettingsEnabledPlugins, healPluginJsonMcpServers, sweepStaleMcpJson } from "./heal-installed-plugins.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -326,15 +326,12 @@ if (process.platform === "win32" && process.env.npm_config_global === "true") {
   }
 }
 
-// ── 3. Native binding self-heal — better-sqlite3 (#408) ──────────────
-// On Windows, `npm rebuild` falls through to node-gyp without MSVC; bypass
-// that by spawning prebuild-install directly. Cross-platform safety net —
-// the binding can also go missing on macOS/Linux when prebuilds are stale
-// or the install was interrupted.
-//
-// Logic lives in scripts/heal-better-sqlite3.mjs (shared with
-// hooks/ensure-deps.mjs so there's one source of truth).
-try { healBetterSqlite3Binding(pkgRoot); } catch { /* best effort — don't block install */ }
+// ── 3. Verify SQLite without installing or rebuilding native code ───
+const sqliteHealth = checkSqliteRuntime(pkgRoot);
+if (!sqliteHealth.ok) {
+  console.error(sqliteRemediation(sqliteHealth));
+  process.exitCode = 1;
+}
 
 // ── 4. Hook normalization at install time (#414) ─────────────────────
 // hooks/hooks.json + .claude-plugin/plugin.json ship with `${CLAUDE_PLUGIN_ROOT}`

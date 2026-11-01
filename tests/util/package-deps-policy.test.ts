@@ -31,10 +31,8 @@ describe("package.json dependency policy (#514)", () => {
     expect(pkg.optionalDependencies?.["better-sqlite3"]).toBeUndefined();
   });
 
-  it("better-sqlite3 version pin is preserved at ^12.6.2", () => {
+  it("ships the read-only health helper used by installed entry points", () => {
     const pkg = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf-8"));
-    // Demoting the package back to dependencies must NOT bump or drop the
-    // pin — the pin is a separate decision tracked in commit history.
-    expect(pkg.dependencies?.["better-sqlite3"]).toBe("^12.6.2");
+    expect(pkg.files).toContain("scripts/sqlite-health.mjs");
   });
 });

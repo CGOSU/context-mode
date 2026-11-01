@@ -929,13 +929,13 @@ context-mode automatically selects the best SQLite backend at runtime based on t
 
 | Priority | Condition | Backend | Why |
 |----------|-----------|---------|-----|
-| 1 | Bun runtime | `bun:sqlite` | Built-in, no native addon |
-| 2 | Linux + Node.js >= 22.5 | `node:sqlite` | Built-in, avoids [SIGSEGV from V8 madvise bug](https://github.com/nodejs/node/issues/62515) |
-| 3 | All other environments | `better-sqlite3` | Mature native addon, prebuilt binaries |
+| 1 | Bun runtime | `bun:sqlite` | Built-in; no native addon is loaded |
+| 2 | Node.js >= 22.5, with built-in SQLite and a passing FTS5 probe | `node:sqlite` | Built-in; avoids a separate native addon |
+| 3 | Supported Node.js runtime when built-in SQLite is unavailable or lacks FTS5 | `better-sqlite3` 13.0.3 | Bundled platform binaries |
 
-**Why node:sqlite on Linux?** Node.js's V8 garbage collector can call `madvise(MADV_DONTNEED)` on memory ranges that overlap `better-sqlite3`'s native addon `.got.plt` section, corrupting resolved symbol addresses and causing sporadic SIGSEGV crashes (1-4/hour on Node v22-v24). `node:sqlite` is compiled into the Node.js binary itself — no separate `.node` file, no `dlopen()`, no `.got.plt` to corrupt.
+Context Mode requires Node.js >= 22.5 (or Bun). It tries `node:sqlite` on every supported Node platform and checks FTS5 in an in-memory database before selecting it. This avoids a separate `.node` addon where possible; on Linux it also avoids the documented V8 `madvise(MADV_DONTNEED)`/`.got.plt` crash path.
 
-**Fallback:** If `node:sqlite` is unavailable (Node < 22.5), context-mode silently falls back to `better-sqlite3`. No user configuration needed.
+**Fallback and troubleshooting:** If `node:sqlite` is unavailable or its FTS5 probe fails, Context Mode uses the declared `better-sqlite3` dependency. Version 13.0.3 requires Node.js >= 22 and ships binaries for macOS x64/arm64, Linux glibc x64/arm64, Linux musl x64/arm64, and Windows x64/arm64. The dependency has no install-time native compilation step and no `prebuild-install` dependency. Context Mode does not automatically download or compile a replacement binary. If SQLite initialization fails, `ctx doctor` reports the failure and remediation; confirm the supported Node/platform, then reinstall Context Mode's declared dependencies with your package manager. Do not use legacy `npm rebuild better-sqlite3` or script-permission changes as remediation for this release. If `prebuild-install` appears alongside `better-sqlite3@12.x`, check the resolved dependency tree.
 
 **Override:** Not currently supported — backend selection is automatic. If you need to force a specific backend, open an issue.
 

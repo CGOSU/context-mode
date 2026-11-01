@@ -566,7 +566,7 @@ context-mode runs as a native [OpenClaw](https://github.com/openclaw) gateway pl
 
    Common locations: **Docker** — `/openclaw` (the default). **Local** — `~/.openclaw` or wherever you set `OPENCLAW_STATE_DIR`.
 
-   The installer handles everything: `npm install`, `npm run build`, `better-sqlite3` native rebuild, extension registration in `runtime.json`, and gateway restart via SIGUSR1.
+   The installer handles everything: dependency installation, `npm run build`, SQLite backend verification, extension registration in `runtime.json`, and gateway restart via SIGUSR1.
 
 2. Open a Pi Agent session.
 
@@ -1121,42 +1121,13 @@ Full configs: [`configs/omp/mcp.json`](configs/omp/mcp.json) | [`configs/omp/SYS
 </details>
 
 <details>
-<summary><strong>Build Prerequisites</strong> <sup>(CentOS, RHEL, Alpine)</sup></summary>
+<summary><strong>SQLite Runtime Requirements & Troubleshooting</strong></summary>
 
-Context Mode uses [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) on Node.js, which ships prebuilt native binaries for most platforms. On glibc >= 2.31 systems (Ubuntu 20.04+, Debian 11+, Fedora 34+, macOS, Windows), `npm install` works without any build tools.
+Context Mode requires Node.js >= 22.5 (or Bun). On Node.js >= 22.5 it prefers the built-in `node:sqlite` backend when an in-memory check confirms FTS5 support; otherwise it uses the declared `better-sqlite3` fallback. Bun uses its built-in `bun:sqlite` backend.
 
-**Linux + Node.js >= 22.5:** Context Mode automatically uses the built-in `node:sqlite` module instead of `better-sqlite3`. This eliminates the native addon entirely, avoiding [sporadic SIGSEGV crashes](https://github.com/nodejs/node/issues/62515) caused by V8's `madvise(MADV_DONTNEED)` corrupting the addon's `.got.plt` section on Linux. No configuration needed — detection is automatic. **Linux + Node < 22.5 is unsupported** ([#564](https://github.com/mksglu/context-mode/issues/564)) — `npm install` will fail with remediation instructions.
+The current `better-sqlite3` 13.0.3 package requires Node.js >= 22 and includes prebuilt binaries for macOS x64/arm64, Linux glibc x64/arm64, Linux musl x64/arm64, and Windows x64/arm64. It has no install-time native compilation step and no `prebuild-install` dependency. Context Mode does not automatically download or compile a replacement binary. Older Node versions and platforms without a compatible included binary are not supported by this release.
 
-**Bun users:** No native compilation needed. Context Mode automatically detects Bun and uses the built-in `bun:sqlite` module via a compatibility adapter. `better-sqlite3` and all its build dependencies are skipped entirely.
-
-On older glibc systems (CentOS 7/8, RHEL 8, Debian 10), prebuilt binaries don't load and better-sqlite3 **automatically falls back to compiling from source** via `prebuild-install || node-gyp rebuild --release`. This requires a C++20 compiler (GCC 10+), Make, and Python with setuptools.
-
-**Windows / missing binding self-heal:** if `better_sqlite3.node` ends up missing after install (e.g. `prebuild-install` not on cmd.exe PATH, no MSVC toolchain), the postinstall script and the runtime hook automatically re-fetch the prebuild and repair the binding — no manual `npm rebuild` needed (#408).
-
-**CentOS 8 / RHEL 8** (glibc 2.28):
-
-```bash
-dnf install -y gcc-toolset-10-gcc gcc-toolset-10-gcc-c++ make python3 python3-setuptools
-scl enable gcc-toolset-10 'npm install -g context-mode'
-```
-
-**CentOS 7 / RHEL 7** (glibc 2.17):
-
-```bash
-yum install -y centos-release-scl
-yum install -y devtoolset-10-gcc devtoolset-10-gcc-c++ make python3
-pip3 install setuptools
-scl enable devtoolset-10 'npm install -g context-mode'
-```
-
-**Alpine Linux:**
-
-Alpine prebuilt binaries (musl) are available in better-sqlite3 v12.8.0+. With the `^12.6.2` dependency range, `npm install` resolves to the latest 12.x and works without build tools on Alpine. If you pin an older version:
-
-```bash
-apk add build-base python3 py3-setuptools
-npm install -g context-mode
-```
+If the SQLite health check fails, run `ctx doctor`, confirm `node --version` is supported, then reinstall Context Mode's declared dependencies with your package manager on a supported platform. The SQLite check reports initialization failure and gives remediation rather than attempting an untracked install or build. Changing script permissions, running `npm rebuild better-sqlite3`, and installing C++ build tools are not required remediation for this release. If your install reports `prebuild-install` alongside `better-sqlite3@12.x`, verify the resolved tree with `npm ls better-sqlite3 prebuild-install`.
 
 </details>
 
@@ -1187,7 +1158,7 @@ When output exceeds 5 KB and an `intent` is provided, Context Mode switches to i
 
 ## How the Knowledge Base Works
 
-The `ctx_index` tool chunks markdown content by headings while keeping code blocks intact, then stores them in a **SQLite FTS5** (Full-Text Search 5) virtual table. The SQLite backend is selected automatically at runtime: `bun:sqlite` on Bun, `node:sqlite` on Node.js >= 22.5, and `better-sqlite3` everywhere else. Search uses **BM25 ranking** — a probabilistic relevance algorithm that scores documents based on term frequency, inverse document frequency, and document length normalization. **Porter stemming** is applied at index time so "running", "runs", and "ran" match the same stem. Titles and headings are weighted **5x** in BM25 scoring for precise navigational queries.
+The `ctx_index` tool chunks markdown content by headings while keeping code blocks intact, then stores them in a **SQLite FTS5** (Full-Text Search 5) virtual table. The SQLite backend is selected automatically at runtime: `bun:sqlite` on Bun, `node:sqlite` on Node.js >= 22.5 when its FTS5 capability check passes, and `better-sqlite3` as the fallback. Search uses **BM25 ranking** — a probabilistic relevance algorithm that scores documents based on term frequency, inverse document frequency, and document length normalization. **Porter stemming** is applied at index time so "running", "runs", and "ran" match the same stem. Titles and headings are weighted **5x** in BM25 scoring for precise navigational queries.
 
 When you call `ctx_search`, it returns relevant content snippets focused around matching query terms — not full documents, not approximations, the actual indexed content with smart extraction around what you're looking for. `ctx_fetch_and_index` extends this to URLs: fetch, convert HTML to markdown, chunk, index. The raw page never enters context. Use the `contentType` parameter to filter results by type (e.g. `code` or `prose`).
 

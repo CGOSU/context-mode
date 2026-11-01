@@ -1087,62 +1087,11 @@ async function doctor(): Promise<number> {
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    // Distinguish package-missing from binding-missing (#514). Both
-    // throw with similar shapes from `import("better-sqlite3")` but the
-    // recovery commands differ:
-    //   - package-missing → `npm install better-sqlite3 --no-optional`
-    //     (npm@7+ silently drops optionalDependencies on engine
-    //     mismatch, e.g. Node 26 vs better-sqlite3@12.x — we name the
-    //     package explicitly + flip the optional filter to recover)
-    //   - binding-missing → `npm rebuild better-sqlite3` (#408 flow,
-    //     Windows + missing prebuild-install shim)
-    const pluginRootForDoctor = getPluginRoot();
-    const bsqPackageDir = resolve(pluginRootForDoctor, "node_modules", "better-sqlite3");
-    const packageMissing = !existsSync(bsqPackageDir);
-
-    if (packageMissing) {
-      criticalFails++;
-      p.log.error(
-        color.red("FTS5 / better-sqlite3: FAIL") +
-          color.dim(" — package-missing") +
-          color.dim(
-            `\n  Path: ${bsqPackageDir}` +
-            "\n  Root cause: npm silently skipped better-sqlite3 because the package's `engines` field excluded the running Node (issue #514, e.g. Node 26 vs better-sqlite3@12.x)." +
-            `\n  Try (primary): cd "${pluginRootForDoctor}" && npm install better-sqlite3 --no-optional` +
-            "\n  Try (fallback): /context-mode:ctx-upgrade",
-          ),
-      );
-    } else if (message.includes("Cannot find module") || message.includes("MODULE_NOT_FOUND")) {
-      p.log.warn(color.yellow("FTS5 / better-sqlite3: SKIP") + color.dim(" — module not available (restart session after upgrade)"));
-    } else {
-      criticalFails++;
-      // Detect better-sqlite3 native bindings-missing pattern (issue #408).
-      // The `bindings` package throws "Could not locate the bindings file"
-      // when better_sqlite3.node failed to install — typical on Windows
-      // when prebuild-install was not on PATH so install fell through to
-      // node-gyp without an MSVC toolchain.
-      const isBindingsMissing =
-        /Could not locate the bindings file/i.test(message) ||
-        /bindings\.node/i.test(message) ||
-        /\bbindings\b/i.test(message);
-      if (isBindingsMissing && process.platform === "win32") {
-        p.log.error(
-          color.red("FTS5 / better-sqlite3: FAIL") +
-            ` — ${message}` +
-            color.dim(
-              "\n  Root cause: prebuild-install was likely not on PATH, so install fell through to node-gyp without an MSVC toolchain (Windows)." +
-              "\n  Try (primary): npm install better-sqlite3   # re-resolves the dep tree and re-links the prebuild-install bin shim to fetch a prebuilt binary" +
-              "\n  Try (fallback): npm rebuild better-sqlite3",
-            ),
-        );
-      } else {
-        p.log.error(
-          color.red("FTS5 / better-sqlite3: FAIL") +
-            ` — ${message}` +
-            color.dim("\n  Try: npm rebuild better-sqlite3"),
-        );
-      }
-    }
+    criticalFails++;
+    p.log.error(
+      color.red("FTS5 / SQLite: FAIL") + ` — ${message}` +
+        color.dim("\n  Reinstall context-mode's declared dependencies on a supported Node/platform, then restart."),
+    );
   }
 
   // Version check — adapter-aware
@@ -1678,88 +1627,23 @@ async function upgrade(opts?: { platform?: string }) {
       s.stop("Dependencies ready");
 
       if (!isInProcessPluginPlatform(detection.platform)) {
-        // Verify native addons through the same bootstrap start.mjs imports.
-        // On modern Node, the ABI-specific cache file is the compatibility marker;
-        // the active binding alone may be stale from a previous Node ABI.
-        s.start("Verifying native addon ABI");
-        const bsqAbiCachePath = resolve(
-          pluginRoot,
-          "node_modules",
-          "better-sqlite3",
-          "build",
-          "Release",
-          `better_sqlite3.abi${process.versions.modules}.node`,
-        );
+        // Verify the selected SQLite backend, not a legacy binary/cache path.
+        s.start("Verifying SQLite capabilities");
         try {
-          const ensureDepsPath = resolve(pluginRoot, "hooks", "ensure-deps.mjs");
-          if (!existsSync(ensureDepsPath)) {
-            throw new Error(`missing ${ensureDepsPath}`);
-          }
-          await import(`${pathToFileURL(ensureDepsPath).href}?upgrade=${Date.now()}`);
-          if (existsSync(bsqAbiCachePath)) {
-            s.stop(color.green("Native addons OK") + color.dim(" — ABI cache present"));
-            changes.push(`better-sqlite3 ABI ${process.versions.modules} cache ready`);
-          } else {
-            s.stop(color.yellow("Native addon ABI cache missing"));
-            p.log.warn(
-              color.dim(`  Try manually: cd "${pluginRoot}" && npm rebuild better-sqlite3`),
-            );
-          }
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          s.stop(color.yellow("Native addon ABI bootstrap unavailable"));
-          p.log.warn(
-            color.yellow("better-sqlite3 ABI repair did not run") +
-              ` — ${message}` +
-              color.dim(`\n  Try manually: cd "${pluginRoot}" && npm rebuild better-sqlite3`),
+          const helperPath = resolve(pluginRoot, "scripts", "sqlite-health.mjs");
+          const { checkSqliteRuntime, sqliteRemediation } = await import(
+            `${pathToFileURL(helperPath).href}?upgrade=${Date.now()}`
           );
+          const health = checkSqliteRuntime(pluginRoot);
+          if (!health.ok) throw new Error(sqliteRemediation(health));
+          s.stop(color.green("SQLite OK") + color.dim(` — ${health.backend}, FTS5 read/write verified`));
+          changes.push(`SQLite verified: ${health.backend}`);
+        } catch (err: unknown) {
+          process.exitCode = 1;
+          s.stop(color.red("SQLite verification failed"));
+          p.log.error(err instanceof Error ? err.message : String(err));
         }
 
-        // ── Post-install binding verifier (#514) ────────────────────
-        // npm@7+ silently drops optionalDependencies whose engines
-        // field excludes the running Node (e.g. Node 26 vs
-        // better-sqlite3@12.x). On a silent skip the package directory
-        // is missing entirely and ensure-deps cannot recover. Fail
-        // loud so /ctx-upgrade no longer reports success while the
-        // knowledge base is unusable.
-        const bsqBindingPath = resolve(
-          pluginRoot,
-          "node_modules",
-          "better-sqlite3",
-          "build",
-          "Release",
-          "better_sqlite3.node",
-        );
-        if (!existsSync(bsqBindingPath)) {
-          // Try one last self-heal — explicit, named install bypasses
-          // the optionalDependency silent-skip path even if the dep
-          // somehow regressed back to optional.
-          try {
-            const healPath = resolve(pluginRoot, "scripts", "heal-better-sqlite3.mjs");
-            if (existsSync(healPath)) {
-              const mod = await import(
-                `${pathToFileURL(healPath).href}?upgrade=${Date.now()}`
-              );
-              if (typeof mod.healBetterSqlite3Binding === "function") {
-                mod.healBetterSqlite3Binding(pluginRoot);
-              }
-            }
-          } catch { /* best effort — verifier below will fail loud */ }
-        }
-        if (!existsSync(bsqBindingPath)) {
-          // Mark the upgrade process for a non-zero exit at completion.
-          // Stays in scope only for the rest of upgrade(); the actual
-          // exit-code wiring sits below the top-level changes report.
-          process.exitCode = 1;
-          p.log.error(
-            color.red("better-sqlite3 native binding: MISSING") +
-              color.dim(`\n  Path: ${bsqBindingPath}`) +
-              color.dim("\n  Cause: npm silently skipped the package (Node engine mismatch, issue #514)") +
-              color.dim(`\n  Try (primary): cd "${pluginRoot}" && npm install better-sqlite3 --no-optional`) +
-              color.dim("\n  Try (fallback): /context-mode:ctx-doctor"),
-          );
-        }
-        
         // Update global npm
         s.start("Updating npm global package");
         try {
