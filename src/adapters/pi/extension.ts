@@ -656,8 +656,12 @@ export default function piExtension(pi: any): void {
       // deliberate choice (which tool for which scenario) without the full
       // block/redirect/memory/tool-selection hierarchy.
       parts.push(
-        "context-mode active. Hierarchy: ctx_batch_execute > ctx_execute > ctx_execute_file > ctx_search. " +
-        "Read/edit files → ctx_execute_file. Multi-command research → ctx_batch_execute. " +
+        "context-mode active. Choose tools by task; there is no fixed tool hierarchy. " +
+        "Locate unfamiliar code → graph_locate/graph_inspect when available. " +
+        "Read files before editing → read; modify files → edit/write. " +
+        "Analyze large files without editing → ctx_execute_file. " +
+        "Large logs/test output → ctx_execute. Multi-command research with large output → ctx_batch_execute. " +
+        "Simple reads and short commands → native tools; context-mode is optional. " +
         "Web pages → ctx_fetch_and_index then ctx_search. Index docs → ctx_index. " +
         "Stats → ctx_stats. Doctor → ctx_doctor. Upgrade → ctx_upgrade. Purge → ctx_purge."
       );
