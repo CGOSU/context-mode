@@ -24,6 +24,7 @@ import { buildResumeSnapshot } from "../../session/snapshot.js";
 import type { SessionEvent } from "../../types.js";
 import { bootstrapMCPTools, makeBridgeDiag, isForegroundSession, type BridgeHandle } from "./mcp-bridge.js";
 import { PiAdapter } from "./index.js";
+import { PI_ROUTING_ANCHOR, omitRepeatedRouting } from "./context-routing.js";
 
 // ── Pi Tool Name Mapping ─────────────────────────────────
 // Pi uses lowercase; shared extractors expect PascalCase (Claude Code convention).
@@ -655,16 +656,7 @@ export default function piExtension(pi: any): void {
       // already tell the model what each tool does. This anchor gives the
       // deliberate choice (which tool for which scenario) without the full
       // block/redirect/memory/tool-selection hierarchy.
-      parts.push(
-        "context-mode active. Choose tools by task; there is no fixed tool hierarchy. " +
-        "Locate unfamiliar code → graph_locate/graph_inspect when available. " +
-        "Read files before editing → read; modify files → edit/write. " +
-        "Analyze large files without editing → ctx_execute_file. " +
-        "Large logs/test output → ctx_execute. Multi-command research with large output → ctx_batch_execute. " +
-        "Simple reads and short commands → native tools; context-mode is optional. " +
-        "Web pages → ctx_fetch_and_index then ctx_search. Index docs → ctx_index. " +
-        "Stats → ctx_stats. Doctor → ctx_doctor. Upgrade → ctx_upgrade. Purge → ctx_purge."
-      );
+      parts.push(PI_ROUTING_ANCHOR);
 
       // Pi-3 + Pi-4: Always build active_memory (not just post-compact),
       // capped at 500 tokens via buildAutoInjection. Falls back to inline
@@ -744,8 +736,10 @@ export default function piExtension(pi: any): void {
   pi.on("context", (event: any) => {
     try {
       if (!_pendingContext) return;
-      const ctx = _pendingContext;
+      const pending = _pendingContext;
       _pendingContext = "";
+      const ctx = omitRepeatedRouting(pending, event.messages);
+      if (!ctx) return;
       event.messages.push({
         role: "user",
         content: ctx,

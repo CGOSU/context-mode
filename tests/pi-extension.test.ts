@@ -731,6 +731,52 @@ describe("Pi Extension", () => {
       expect(trailing).not.toContain("Stable system prompt.");
     });
 
+    it("does not repeat routing already present, but still delivers a new resume", async () => {
+      await registerPiExtension(api);
+      await api._trigger("session_start", {
+        sessionManager: { getSessionFile: () => `routing-resume-${Date.now()}-${Math.random()}` },
+      });
+      const userMessage = { role: "user", content: "Preserve this user instruction." };
+      const messages: any[] = [userMessage];
+      await api._trigger("before_agent_start", { systemPrompt: "Stable base." });
+      await api._trigger("context", { messages });
+      const initialInjection = String(messages[messages.length - 1].content);
+      // Pi may expose prior injected text as content blocks to another handler.
+      messages[messages.length - 1].content = [{ type: "text", text: initialInjection }];
+
+      await api._trigger("tool_result", {
+        toolName: "read", input: { path: "/src/recovery-target.ts" }, result: "export const recovery = true;",
+      });
+      await api._trigger("session_before_compact", {});
+      await api._trigger("before_agent_start", { systemPrompt: "Stable base." });
+      await api._trigger("context", { messages });
+      const text = messages.map(m => Array.isArray(m.content) ? m.content.map((c: any) => c.text ?? "").join("") : m.content).join("\n");
+      expect(text.split("context-mode active.").length - 1).toBe(1);
+      expect(text).toContain("session_resume");
+      expect(text).toContain("recovery-target.ts");
+      expect(messages[0]).toEqual(userMessage);
+      expect(messages[1].content).toEqual([{ type: "text", text: initialInjection }]);
+
+      // The guard is request-local, not a permanent disable flag.
+      await api._trigger("before_agent_start", { systemPrompt: "Stable base." });
+      const fresh = await api._trigger("context", { messages: [] });
+      expect(String(fresh.messages[0].content)).toContain("context-mode active.");
+    });
+
+    it("does not append a second routing-only injection to the same assembled context", async () => {
+      await registerPiExtension(api);
+      await api._trigger("session_start", {
+        sessionManager: { getSessionFile: () => `routing-only-${Date.now()}-${Math.random()}` },
+      });
+      await api._trigger("before_agent_start", { systemPrompt: "Base." });
+      const messages: any[] = [];
+      await api._trigger("context", { messages });
+      const first = structuredClone(messages);
+      await api._trigger("before_agent_start", { systemPrompt: "Base." });
+      await api._trigger("context", { messages });
+      expect(messages).toEqual(first);
+    });
+
     it("returns nothing when no resume exists", async () => {
       await registerPiExtension(api);
 
