@@ -26,6 +26,7 @@
  *     settings.json `enabledPlugins` is `{key: bool}` (cross-platform contract)
  */
 
+import { readCliSource } from "../helpers/cli-source.js";
 import { describe, test, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -34,7 +35,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
 
-const cliSrc = readFileSync(resolve(ROOT, "src", "cli.ts"), "utf-8");
+const cliSrc = readCliSource();
 const startSrc = readFileSync(resolve(ROOT, "start.mjs"), "utf-8");
 const upgradeIdx = cliSrc.indexOf("async function upgrade");
 // upgradeBody cap was 14000 at v1.0.114; the function has grown by ~10k chars

@@ -1,9 +1,10 @@
 import { expect, it } from "vitest";
+import { readCliSource } from "../helpers/cli-source.js";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 it("doctor counts SQLite load/capability errors as failures rather than skipping them", () => {
-  const source = readFileSync(resolve(import.meta.dirname, "../../src/cli.ts"), "utf8");
+  const source = readCliSource();
   const start = source.indexOf("Checking FTS5 / SQLite");
   const error = source.indexOf("catch (err: unknown)", start);
   const end = source.indexOf("// Version check", error);

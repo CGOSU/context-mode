@@ -14,10 +14,11 @@
  * No regex in the implementation — pure `path.relative`/`path.resolve` math.
  */
 
+import { readServerSource } from "../helpers/server-source.js";
 import { describe, it, expect, beforeAll, afterAll, test } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isPathInsideProject, evaluateProjectContainment } from "../../src/security.js";
@@ -118,7 +119,7 @@ describe("isPathInsideProject — issue #852 containment", () => {
 // ─────────────────────────────────────────────────────────
 describe("ctx_execute_file: project-boundary guard wiring (#852)", () => {
   const __dirname = dirname(fileURLToPath(import.meta.url));
-  const serverSrc = readFileSync(resolve(__dirname, "../../src/server.ts"), "utf-8");
+  const serverSrc = readServerSource();
 
   // Algorithmic source-introspection helpers (no regex — project no-regex rule).
   // extractBlock: slice from a marker to the first top-level closing brace ("\n}").

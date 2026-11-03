@@ -23,16 +23,12 @@
  * Source-text inspection mirrors tests/util/cli-upgrade-verification.test.ts.
  */
 
+import { readServerSource } from "../helpers/server-source.js";
 import { describe, test, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readCliSource } from "../helpers/cli-source.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(__dirname, "..", "..");
-
-const serverSrc = readFileSync(resolve(ROOT, "src", "server.ts"), "utf-8");
-const cliSrc = readFileSync(resolve(ROOT, "src", "cli.ts"), "utf-8");
+const serverSrc = readServerSource();
+const cliSrc = readCliSource();
 
 // Carve out the ctx_upgrade handler body so we don't false-positive on
 // unrelated detectPlatform calls elsewhere in server.ts (e.g. the MCP

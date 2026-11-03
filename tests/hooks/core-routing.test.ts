@@ -1,24 +1,11 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from "vitest";
-import { spawn } from "node:child_process";
-import {
-  writeFileSync,
-  mkdirSync,
-  unlinkSync,
-  existsSync,
-  readdirSync,
-  readFileSync,
-  mkdtempSync,
-  rmSync,
-  utimesSync,
-} from "node:fs";
+/** Hook regressions: core-routing. */
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
+import { writeFileSync, mkdirSync, unlinkSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { useMcpReadyFixture } from "./mcp-ready-fixture.js";
+import { spawnPreToolUseHook } from "./routing-probe.js";
 
-import {
-  sentinelDir,
-  sentinelPathForPid,
-  isMCPReady,
-} from "../../hooks/core/mcp-ready.mjs";
 
 // Dynamic import for .mjs module
 let routePreToolUse: (
@@ -35,12 +22,19 @@ let routePreToolUse: (
   additionalContext?: string;
 } | null;
 
+
 let resetGuidanceThrottle: (sessionId?: string) => void;
+
 let initSecurity: (buildDir: string) => Promise<boolean>;
+
 let ROUTING_BLOCK: string;
+
 let createRoutingBlock: (t: any, options?: { includeCommands?: boolean; toolSearchBootstrap?: boolean }) => string;
+
 let READ_GUIDANCE: string;
+
 let GREP_GUIDANCE: string;
+
 
 beforeAll(async () => {
   const mod = await import("../../hooks/core/routing.mjs");
@@ -54,30 +48,11 @@ beforeAll(async () => {
   READ_GUIDANCE = constants.READ_GUIDANCE;
   GREP_GUIDANCE = constants.GREP_GUIDANCE;
 });
-
-// MCP readiness sentinel — most tests expect MCP to be ready (deny behavior).
-// Tests for graceful degradation (#230) remove sentinel explicitly.
-//
-// Use an isolated temp dir for sentinels so the directory scan in isMCPReady()
-// is not polluted by leftover sentinels from real MCP servers running on the
-// developer's machine. The hook honors CONTEXT_MODE_MCP_SENTINEL_DIR.
-const _sentinelDir = mkdtempSync(join(tmpdir(), "ctx-test-sentinels-"));
-process.env.CONTEXT_MODE_MCP_SENTINEL_DIR = _sentinelDir;
-const mcpSentinel = resolve(_sentinelDir, `context-mode-mcp-ready-${process.pid}`);
-
-beforeEach(() => {
+const { _sentinelDir, mcpSentinel } = useMcpReadyFixture(() => {
   if (typeof resetGuidanceThrottle === "function") resetGuidanceThrottle();
-  writeFileSync(mcpSentinel, String(process.pid));
 });
 
-afterEach(() => {
-  try { unlinkSync(mcpSentinel); } catch {}
-});
 
-afterAll(() => {
-  try { rmSync(_sentinelDir, { recursive: true, force: true }); } catch {}
-  delete process.env.CONTEXT_MODE_MCP_SENTINEL_DIR;
-});
 
 describe("routePreToolUse", () => {
   // ─── Bash routing ──────────────────────────────────────
@@ -998,335 +973,3 @@ describe("routePreToolUse", () => {
     });
   });
 });
-
-// ─── mcp-ready.mjs regression matrix (#347 guard) ──────────────────────────
-//
-// PR #347 replaced the PPID-keyed sentinel lookup with a directory-scan over
-// `<sentinelDir()>/context-mode-mcp-ready-*` files. These tests lock in the
-// directory-scan contract so a future refactor cannot silently regress to a
-// PPID-coupled lookup. The test runner's own sentinel (written by the
-// file-level beforeEach above) is removed inside cleanup tests where its
-// presence would mask dead-PID cleanup.
-
-const SENTINEL_PREFIX = "context-mode-mcp-ready-";
-const DEAD_PID = 2_147_483_647; // INT32_MAX — never a live PID on any platform
-
-const fixtures = new Set<string>();
-function createSentinel(pidOrLabel: number | string, content?: string): string {
-  const path = join(sentinelDir(), `${SENTINEL_PREFIX}${pidOrLabel}`);
-  writeFileSync(path, content ?? String(pidOrLabel));
-  fixtures.add(path);
-  return path;
-}
-
-// #844: isMCPReady() only cleans up a dead-PID sentinel once it is OLDER than
-// the freshness window (a recently-refreshed sentinel may belong to a live
-// server in another PID namespace). Age a sentinel past that window so the
-// stale-cleanup path is exercised deterministically.
-function ageSentinel(path: string): void {
-  const tenMinAgoSec = Date.now() / 1000 - 600;
-  utimesSync(path, tenMinAgoSec, tenMinAgoSec);
-}
-
-function hasUnrelatedLiveSentinel(): boolean {
-  try {
-    const dir = sentinelDir();
-    for (const f of readdirSync(dir).filter((f) => f.startsWith(SENTINEL_PREFIX))) {
-      try {
-        const pid = parseInt(readFileSync(join(dir, f), "utf8"), 10);
-        if (!Number.isNaN(pid) && pid !== process.pid) {
-          process.kill(pid, 0);
-          return true;
-        }
-      } catch { /* dead — ignore */ }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-const POLLUTED = hasUnrelatedLiveSentinel();
-
-describe("mcp-ready: contract", () => {
-  afterEach(() => {
-    for (const p of fixtures) {
-      try { unlinkSync(p); } catch { /* already gone */ }
-    }
-    fixtures.clear();
-  });
-
-  it("sentinelPathForPid joins sentinelDir + prefix + pid", () => {
-    expect(sentinelPathForPid(12345)).toBe(join(sentinelDir(), `${SENTINEL_PREFIX}12345`));
-  });
-
-  describe("sentinelDir platform branch", () => {
-    let originalPlatform: NodeJS.Platform;
-    let originalEnv: string | undefined;
-    beforeEach(() => {
-      originalPlatform = process.platform;
-      originalEnv = process.env.CONTEXT_MODE_MCP_SENTINEL_DIR;
-      delete process.env.CONTEXT_MODE_MCP_SENTINEL_DIR;
-    });
-    afterEach(() => {
-      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
-      if (originalEnv !== undefined) {
-        process.env.CONTEXT_MODE_MCP_SENTINEL_DIR = originalEnv;
-      }
-    });
-
-    it("returns os.tmpdir() on win32", () => {
-      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      expect(sentinelDir()).toBe(tmpdir());
-    });
-
-    it("returns /tmp on non-win32", () => {
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-      expect(sentinelDir()).toBe("/tmp");
-    });
-  });
-
-  it("isMCPReady returns true when a sentinel with a live PID exists", () => {
-    createSentinel(process.pid);
-    expect(isMCPReady()).toBe(true);
-  });
-
-  it.each([
-    ["empty payload", "test-empty-9991", ""],
-    ["non-numeric payload", "test-garbage-9992", "abc"],
-  ])("isMCPReady does not throw on %s sentinels", (_label, pid, content) => {
-    createSentinel(pid, content);
-    expect(() => isMCPReady()).not.toThrow();
-  });
-});
-
-describe.skipIf(POLLUTED)("mcp-ready: stale-cleanup self-healing", () => {
-  // The file-level beforeEach above writes a live sentinel at process.pid,
-  // which would mask the cleanup we want to verify. Remove it here.
-  beforeEach(() => {
-    try { unlinkSync(mcpSentinel); } catch {}
-  });
-
-  afterEach(() => {
-    for (const p of fixtures) {
-      try { unlinkSync(p); } catch { /* already gone */ }
-    }
-    fixtures.clear();
-  });
-
-  it("unlinks a STALE sentinel whose PID is dead", () => {
-    const path = createSentinel(DEAD_PID);
-    ageSentinel(path);
-    isMCPReady();
-    expect(existsSync(path)).toBe(false);
-    fixtures.delete(path);
-  });
-
-  it("unlinks two STALE dead sentinels in a single scan", () => {
-    const a = createSentinel(DEAD_PID);
-    const b = createSentinel(DEAD_PID - 1);
-    ageSentinel(a);
-    ageSentinel(b);
-    expect(isMCPReady()).toBe(false);
-    expect(existsSync(a)).toBe(false);
-    expect(existsSync(b)).toBe(false);
-    fixtures.delete(a);
-    fixtures.delete(b);
-  });
-
-  // #844: a recently-refreshed sentinel must NOT be cleaned up even when its
-  // PID is invisible from this namespace (shared /tmp across PID namespaces).
-  it("keeps a FRESH dead/invisible-PID sentinel (#844 cross-namespace guard)", () => {
-    const path = createSentinel(DEAD_PID); // mtime = now → fresh
-    expect(isMCPReady()).toBe(true);
-    expect(existsSync(path)).toBe(true);
-    fixtures.delete(path);
-    try { unlinkSync(path); } catch { /* cleanup */ }
-  });
-
-  it("in one scan: keeps the FRESH sentinel and cleans the STALE one (#844)", () => {
-    const fresh = createSentinel(DEAD_PID);
-    const stale = createSentinel(DEAD_PID - 1);
-    ageSentinel(stale);
-    expect(isMCPReady()).toBe(true);
-    expect(existsSync(fresh)).toBe(true);
-    expect(existsSync(stale)).toBe(false);
-    fixtures.delete(fresh);
-    try { unlinkSync(fresh); } catch { /* cleanup */ }
-  });
-});
-
-describe("mcp-ready: PPID-independence (regression for #347)", () => {
-  it("returns true when the only live sentinel is at a child PID outside the runner's process tree", async () => {
-    // Pass the resolved sentinel directory in via env var so the child does not
-    // re-derive it — keeps mcp-ready.mjs as the single source of truth for the
-    // path shape, and avoids node-CLI argv ambiguity with `-e`.
-    const childScript = `
-      const { writeFileSync, unlinkSync } = require("node:fs");
-      const { join } = require("node:path");
-      const dir = process.env.MCP_SENTINEL_DIR;
-      const path = join(dir, "context-mode-mcp-ready-" + process.pid);
-      writeFileSync(path, String(process.pid));
-      const cleanup = () => { try { unlinkSync(path); } catch {} process.exit(0); };
-      process.on("SIGTERM", cleanup);
-      process.on("SIGINT", cleanup);
-      setInterval(() => {}, 1000);
-    `;
-    const resolvedDir = sentinelDir();
-    const child = spawn(process.execPath, ["-e", childScript], {
-      stdio: "ignore",
-      env: { ...process.env, MCP_SENTINEL_DIR: resolvedDir },
-    });
-    const childPid = child.pid!;
-    const childSentinel = join(resolvedDir, `${SENTINEL_PREFIX}${childPid}`);
-
-    try {
-      // Wait up to 2s for child to write its sentinel.
-      const deadline = Date.now() + 2000;
-      while (Date.now() < deadline && !existsSync(childSentinel)) {
-        await new Promise((r) => setTimeout(r, 25));
-      }
-      expect(existsSync(childSentinel)).toBe(true);
-
-      // The regression-defining assertion: the sentinel's PID is not in the
-      // test runner's process tree. A PPID-keyed lookup would return false here.
-      expect(childPid).not.toBe(process.pid);
-      expect(childPid).not.toBe(process.ppid);
-
-      // Directory-scan finds the child's sentinel regardless of PPID.
-      expect(isMCPReady()).toBe(true);
-    } finally {
-      child.kill("SIGTERM");
-      await new Promise<void>((r) => child.on("exit", () => r()));
-      try { unlinkSync(childSentinel); } catch { /* child cleaned up */ }
-    }
-  });
-});
-
-// ─────────────────────────────────────────────────────────
-// Slice 4 — additionalContext surfacing on security init fail (#558)
-// ─────────────────────────────────────────────────────────
-//
-// The pre-558 silent-fail UX gap: when initSecurity() fails to load the
-// security module (marketplace install missing build/security.js AND
-// hooks/security.bundle.mjs), the only signal is a stderr WARNING line
-// that adapters typically suppress / discard. The user has no in-band
-// signal that permissions.deny is fail-open.
-//
-// Fix: routing.mjs exposes `buildSecurityWarningContext()` — a pure
-// helper that returns a structured agent-facing block when
-// isSecurityInitFailed() is true, and null otherwise. SessionStart
-// hooks call initSecurity() and append the block to their
-// additionalContext, so the agent sees the warning in-context (not
-// just in suppressed stderr).
-
-describe("buildSecurityWarningContext — agent-facing security warning (#558)", () => {
-  it("returns null when security init has not failed (default state)", async () => {
-    // Use a subprocess so the module-scoped securityInitFailed flag
-    // is in its initial false state — the in-process module from
-    // beforeAll() above may have been touched by other tests.
-    const r = await spawnRoutingProbe(`
-      import { buildSecurityWarningContext, isSecurityInitFailed } from ${routingUrl()};
-      process.stdout.write(JSON.stringify({
-        failed: isSecurityInitFailed(),
-        warning: buildSecurityWarningContext(),
-      }));
-    `);
-    expect(r.parsed.failed).toBe(false);
-    expect(r.parsed.warning).toBeNull();
-  });
-
-  it("returns a structured warning string when security init has failed", async () => {
-    const missingBundle = join(tmpdir(), `ctx-slice4-no-bundle-${Date.now()}.bundle.mjs`);
-    const missingBuild = join(tmpdir(), `ctx-slice4-no-build-${Date.now()}`);
-    const r = await spawnRoutingProbe(
-      `
-      import { initSecurity, buildSecurityWarningContext, isSecurityInitFailed } from ${routingUrl()};
-      await initSecurity(${JSON.stringify(missingBuild)});
-      process.stdout.write(JSON.stringify({
-        failed: isSecurityInitFailed(),
-        warning: buildSecurityWarningContext(),
-      }));
-      `,
-      {
-        CONTEXT_MODE_SUPPRESS_SECURITY_WARNING: "1",
-        CONTEXT_MODE_SECURITY_BUNDLE_PATH: missingBundle,
-      },
-    );
-    expect(r.parsed.failed).toBe(true);
-    expect(r.parsed.warning).toBeTruthy();
-    expect(typeof r.parsed.warning).toBe("string");
-    // Must mention the security gap and the remediation, AND must use
-    // a recognizable XML-ish wrapper so the agent can parse / scope it.
-    expect(r.parsed.warning).toMatch(/security/i);
-    expect(r.parsed.warning).toMatch(/permissions\.deny|deny pattern/i);
-    expect(r.parsed.warning).toMatch(/<context_mode_security_warning>|security_warning/);
-    // Must point users at the actionable fix.
-    expect(r.parsed.warning).toMatch(/npm run bundle|security\.bundle\.mjs|reinstall/i);
-  });
-
-  it("hooks/sessionstart.mjs wires initSecurity + buildSecurityWarningContext into the SessionStart additionalContext", () => {
-    // Static-source check — the wiring must be present in the
-    // top-level Claude Code SessionStart hook so users see the
-    // warning in-band on first session of a broken install.
-    const src = readFileSync(resolve(SLICE4_DIRNAME, "..", "..", "hooks", "sessionstart.mjs"), "utf-8");
-    expect(src).toContain("initSecurity");
-    expect(src).toContain("buildSecurityWarningContext");
-    expect(src).toContain("isSecurityInitFailed");
-  });
-});
-
-/**
- * Helper — spawn a fresh node subprocess and run a small ESM snippet
- * against routing.mjs. Returns parsed stdout JSON. Each call is
- * isolated (no shared module state) so the global securityInitFailed
- * flag starts false in every test.
- */
-const SLICE4_DIRNAME = (() => {
-  // ESM-safe __dirname for the slice 4 helpers (vitest's main file
-  // doesn't have one). Lazily evaluated to avoid touching top-level state.
-  const { fileURLToPath } = require("node:url");
-  const { dirname } = require("node:path");
-  return dirname(fileURLToPath(import.meta.url));
-})();
-
-function routingUrl(): string {
-  const path = resolve(SLICE4_DIRNAME, "..", "..", "hooks", "core", "routing.mjs");
-  // pathToFileURL handles Windows drive letters correctly.
-  const { pathToFileURL } = require("node:url");
-  return JSON.stringify(pathToFileURL(path).href);
-}
-
-async function spawnRoutingProbe(
-  code: string,
-  env: Record<string, string> = {},
-): Promise<{ status: number | null; stdout: string; parsed: any }> {
-  const { spawnSync } = await import("node:child_process");
-  const r = spawnSync("node", ["--input-type=module", "-e", code], {
-    encoding: "utf-8",
-    timeout: 15_000,
-    env: { ...process.env, ...env },
-  });
-  const stdout = (r.stdout ?? "").trim();
-  let parsed: any = null;
-  try { parsed = JSON.parse(stdout); } catch { /* surface raw */ }
-  return { status: r.status, stdout, parsed };
-}
-
-async function spawnPreToolUseHook(
-  input: Record<string, unknown>,
-  env: Record<string, string> = {},
-): Promise<{ status: number | null; stdout: string; parsed: any }> {
-  const { spawnSync } = await import("node:child_process");
-  const repoRoot = resolve(SLICE4_DIRNAME, "..", "..");
-  const r = spawnSync(process.execPath, ["hooks/pretooluse.mjs"], {
-    cwd: repoRoot,
-    input: JSON.stringify(input),
-    encoding: "utf-8",
-    timeout: 15_000,
-    env: { ...process.env, ...env },
-  });
-  const stdout = (r.stdout ?? "").trim();
-  let parsed: any = null;
-  try { parsed = JSON.parse(stdout); } catch { /* surface raw */ }
-  return { status: r.status, stdout, parsed };
-}

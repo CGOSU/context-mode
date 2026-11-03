@@ -39,7 +39,8 @@
  * Pure, null-safe, algorithmic — NO regex.
  */
 
-import { buildAgentUsageEvent, type AgentUsageCounts, type SessionEvent } from "../../session/extract.js";
+import { buildAgentUsageEvent, type AgentUsageCounts } from "../../session/extract-usage.js";
+import type { SessionEvent } from "../../session/extract-types.js";
 
 /** Non-negative finite number, else 0. */
 function num(v: unknown): number {

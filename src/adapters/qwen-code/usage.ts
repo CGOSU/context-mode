@@ -33,7 +33,8 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { platform } from "node:os";
 
-import { buildAgentUsageEvent, type AgentUsageCounts, type SessionEvent } from "../../session/extract.js";
+import { buildAgentUsageEvent, type AgentUsageCounts } from "../../session/extract-usage.js";
+import type { SessionEvent } from "../../session/extract-types.js";
 
 /** Floor-and-clamp a token field to a non-negative integer (mirrors omp/usage). */
 function tokenNum(v: unknown): number {

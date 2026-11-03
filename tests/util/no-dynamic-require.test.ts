@@ -20,10 +20,12 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { readCliSource } from "../helpers/cli-source.js";
 
 const ROOT = resolve(__dirname, "..", "..");
 
 function readSrc(rel: string): string {
+  if (rel === "src/cli.ts") return readCliSource();
   return readFileSync(resolve(ROOT, rel), "utf-8");
 }
 

@@ -18,6 +18,7 @@
  * Run: npx vitest run tests/core/fetch-cleanup.test.ts
  */
 
+import { readServerSource } from "../helpers/server-source.js";
 import { strict as assert } from "node:assert";
 import { createServer, type Server } from "node:http";
 import { readdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
@@ -75,7 +76,7 @@ function readAndCleanup(outputPath: string): { content: string | null; error: Er
 
 describe("ctx_fetch_and_index cleanup — static source guard", () => {
   test("fetch path allocates and cleans up the temp file", () => {
-    const src = readFileSync(SERVER_TS, "utf-8");
+    const src = readServerSource();
     // The fetch path may live in an extracted helper (runFetchOne) or inline
     // in the registered handler. Either way, the source MUST allocate a
     // ctx-fetch-*.dat path and clean it up in a finally branch.

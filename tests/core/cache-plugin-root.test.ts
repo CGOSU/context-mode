@@ -1,4 +1,5 @@
 import "../setup-home";
+import { readCliSource } from "../helpers/cli-source.js";
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -13,7 +14,7 @@ import { resolve } from "node:path";
  * (Per PR #376.)
  */
 
-const CLI_SRC = readFileSync(resolve(__dirname, "../../src/cli.ts"), "utf-8");
+const CLI_SRC = readCliSource();
 
 describe("cachePluginRoot — OpenCode/KiloCode 2025+ layout", () => {
   it("uses the new packages/context-mode@latest layout on POSIX", () => {

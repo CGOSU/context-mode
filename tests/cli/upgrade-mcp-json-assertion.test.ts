@@ -29,6 +29,7 @@
  * no `.mcp.json` to heal.
  */
 
+import { readCliSource } from "../helpers/cli-source.js";
 import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -37,7 +38,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
 
-const cliSrc = readFileSync(resolve(ROOT, "src", "cli.ts"), "utf-8");
+const cliSrc = readCliSource();
 const upgradeIdx = cliSrc.indexOf("async function upgrade");
 // The window must cover updatePluginRegistry + the post-bump sweep block.
 // Containment hardening can push sweepStaleMcpJson past a tighter slice;

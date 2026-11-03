@@ -1,6 +1,6 @@
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { JS_RUNTIMES } from "./adapters/types.js";
+import { JS_RUNTIMES } from "./adapters/runtime-constants.js";
 
 /**
  * Allowlist for SHELL env override. Only POSIX shells + Windows shells permit

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Import from src — function must be exported (RED until implemented).
-import { openInBrowser } from "../../src/cli.js";
+import { openInBrowser } from "../../src/cli-shared.js";
 
 // Sentinel file the malicious URL would create if shell-interpolated.
 const PWNED = join(tmpdir(), `ctx-pwned-${process.pid}-${Date.now()}.flag`);

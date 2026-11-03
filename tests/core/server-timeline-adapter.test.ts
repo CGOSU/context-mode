@@ -1,7 +1,8 @@
+import { readServerSource } from "../helpers/server-source.js";
 import "../setup-home";
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+
+
 
 /**
  * Slice 5 — server.ts ctx_search timeline mode.
@@ -16,10 +17,7 @@ import { resolve } from "node:path";
  * while still preventing regressions of the original bug (#367 follow-ups).
  */
 
-const SERVER_SRC = readFileSync(
-  resolve(__dirname, "../../src/server.ts"),
-  "utf-8",
-);
+const SERVER_SRC = readServerSource();
 
 describe("ctx_search timeline mode wiring (server.ts)", () => {
   it("opens SessionDB via resolveSessionDbPath (worktree suffix + casing migration)", () => {
@@ -40,7 +38,7 @@ describe("ctx_search timeline mode wiring (server.ts)", () => {
   it("passes the detected adapter through to searchAllSources", () => {
     // searchAllSources call site should include `adapter:` in its options.
     expect(SERVER_SRC).toMatch(
-      /searchAllSources\(\{[\s\S]*?adapter:\s*_detectedAdapter[\s\S]*?\}\)/,
+      /searchAllSources\(\{[\s\S]*?adapter:\s*context\._detectedAdapter[\s\S]*?\}\)/,
     );
   });
 });
