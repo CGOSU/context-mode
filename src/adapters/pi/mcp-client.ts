@@ -101,6 +101,7 @@ export interface MCPTool {
 export interface MCPCallResult {
   content?: Array<{ type?: string; text?: string }>;
   isError?: boolean;
+  structuredContent?: Record<string, unknown>;
 }
 
 // Bridge-imposed timeout for protocol-handshake methods (initialize,

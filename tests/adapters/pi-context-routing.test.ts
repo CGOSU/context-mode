@@ -32,4 +32,9 @@ describe("request-local routing deduplication", () => {
       .toBe(memory);
     expect(omitRepeatedRouting(anchor + "\n\n" + memory, [])).toBe(anchor + "\n\n" + memory);
   });
+
+  it("recognizes its typed Pi extension message, but not unrelated custom messages", () => {
+    expect(omitRepeatedRouting(anchor, [{ role: "custom", customType: "context-mode-history", content: anchor }])).toBe("");
+    expect(omitRepeatedRouting(anchor, [{ role: "custom", customType: "other-extension", content: anchor }])).toBe(anchor);
+  });
 });

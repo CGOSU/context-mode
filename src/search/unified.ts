@@ -20,7 +20,7 @@ export interface UnifiedSearchResult {
   title: string;
   content: string;
   source: string;
-  origin: "current-session" | "prior-session" | "auto-memory";
+  origin: "indexed-content" | "prior-session" | "auto-memory";
   timestamp?: string;
   rank?: number;
   matchLayer?: string;
@@ -86,10 +86,6 @@ export function searchAllSources(opts: SearchAllSourcesOpts): UnifiedSearchResul
 
   const results: UnifiedSearchResult[] = [];
 
-  // Capture session start time once — used as proxy for ContentStore items
-  // (we don't know exact indexing time, but all content is from current session)
-  const sessionStartTime = new Date().toISOString();
-
   // ── Project scope (#737) ──
   // Resolve the per-project session-id allow-set ONCE, before the
   // ContentStore call. `projectScope === null` means cross-project recall —
@@ -119,8 +115,8 @@ export function searchAllSources(opts: SearchAllSourcesOpts): UnifiedSearchResul
         title: r.title,
         content: r.content,
         source: r.source,
-        origin: "current-session" as const,
-        timestamp: r.timestamp || sessionStartTime,
+        origin: "indexed-content" as const,
+        timestamp: r.timestamp,
         rank: r.rank,
         matchLayer: r.matchLayer,
         highlighted: r.highlighted,

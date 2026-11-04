@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerBatchTool } from "./server-batch.js";
+import { boundResponse } from "./response-budget.js";
 import { registerExecutionTools } from "./server-execution.js";
 import { registerIndexTool } from "./server-index.js";
 import { registerSearchTool } from "./server-search.js";
@@ -750,6 +751,7 @@ const sessionStats = {
 type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
+  structuredContent?: Record<string, unknown>;
 };
 
 function storageErrorResult(err: unknown): ToolResult | null {
@@ -874,7 +876,7 @@ function healCacheMidSession(): void {
   } catch { /* best effort */ }
 }
 
-function trackResponse(toolName: string, response: ToolResult): ToolResult {
+function trackResponse(toolName: string, response: ToolResult, maxOutputChars?: number): ToolResult {
   // #854: a response is activity too — refresh the bridge-child idle clock so a
   // chatty/streaming call keeps its server alive even between inbound frames.
   noteMcpActivity();
@@ -883,9 +885,19 @@ function trackResponse(toolName: string, response: ToolResult): ToolResult {
   // Prepend version outdated warning if needed
   if (shouldShowVersionWarning() && response.content.length > 0) {
     const hint = getUpgradeHint();
-    response.content[0].text =
-      `⚠️ context-mode v${VERSION} outdated → v${_latestVersion} available. Upgrade: ${hint}\n\n` +
-      response.content[0].text;
+    const warning = `⚠️ context-mode v${VERSION} outdated → v${_latestVersion} available. Upgrade: ${hint}\n\n`;
+    const size = response.content.map(c => c.text).join("\n").length;
+    // An optional upgrade hint must never displace execution evidence.
+    if (maxOutputChars === undefined || size + warning.length <= maxOutputChars) {
+      response.content[0].text = warning + response.content[0].text;
+    }
+  }
+  if (maxOutputChars !== undefined && response.content.length) {
+    response.content = [{
+      type: "text",
+      text: boundResponse(response.content.map(c => c.text).join("\n"), maxOutputChars,
+        "(output cap reached) Preview shortened; use the returned source for details when available."),
+    }];
   }
 
   const bytes = response.content.reduce(

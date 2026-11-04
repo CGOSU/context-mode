@@ -14,11 +14,11 @@ function startsWithRouting(value: unknown): value is string {
  */
 export function omitRepeatedRouting(
   pending: string,
-  messages: ReadonlyArray<{ role?: string; content?: unknown }>,
+  messages: ReadonlyArray<{ role?: string; customType?: string; content?: unknown }>,
 ): string {
   if (!startsWithRouting(pending)) return pending;
   const alreadyPresent = messages.some(message => {
-    if (message.role !== "user") return false;
+    if (message.role !== "user" && !(message.role === "custom" && message.customType === "context-mode-history")) return false;
     if (startsWithRouting(message.content)) return true;
     return Array.isArray(message.content) && message.content.some(block =>
       block?.type === "text" && startsWithRouting(block.text),

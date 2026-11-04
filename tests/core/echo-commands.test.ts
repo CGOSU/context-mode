@@ -24,6 +24,7 @@
  * Run: npx vitest run tests/core/echo-commands.test.ts
  */
 
+import "../setup-home";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -289,14 +290,14 @@ describe.each(["ctx_execute", "ctx_execute_file"])("Pi %s result payload", (tool
     expect(resp?.result?.content?.[0]?.text).toMatch(/timed out/i);
   }, 30_000);
 
-  test("preserves the existing partial-output timeout status", async () => {
+  test("partial-output timeout remains a failure with captured output", async () => {
     const resp = await run('console.log("before-timeout"); setInterval(() => {}, 1000);', { timeout: 500 });
     expect(resp?.error).toBeUndefined();
     expect(resp?.result).toBeDefined();
-    expect(resp?.result?.isError ?? false).toBe(tool === "ctx_execute_file");
+    expect(resp?.result?.isError).toBe(true);
     const text = resp?.result?.content?.[0]?.text ?? "";
     expect(text).toMatch(/timed out/i);
-    if (tool === "ctx_execute") expect(text).toContain("before-timeout");
+    expect(text).toContain("before-timeout");
   }, 30_000);
 
   test("keeps large intent output searchable without echoing the input", async () => {

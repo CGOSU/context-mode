@@ -1,4 +1,5 @@
 import { ContentStore } from "./store.js";
+import { boundResponse } from "./response-budget.js";
 
 
 // ─────────────────────────────────────────────────────────
@@ -147,27 +148,30 @@ export function formatBatchQueryResults(
 
   store.withSearchBatch((search) => {
     for (const query of queries) {
-      if (outputSize > maxOutput) {
-        sections.push(`## ${query}\n(output cap reached — use ctx_search(queries: ["${query}"]) for details)\n`);
-        continue;
+      if (outputSize >= maxOutput) {
+        sections.push("(output cap reached) Remaining queries omitted; use focused ctx_search queries.");
+        break;
       }
 
       const results = search(query, 3, searchSource, undefined, "exact");
       sections.push(`## ${query}`);
       sections.push("");
+      outputSize += query.length + 5;
       if (results.length > 0) {
         for (const result of results) {
           const snippet = extractSnippet(result.content, query, 3000, result.highlighted);
-          sections.push(`### ${result.title}`);
+          sections.push(`### ${result.title} [${result.source}]`);
           sections.push(snippet);
           sections.push("");
-          outputSize += snippet.length + result.title.length;
+          outputSize += snippet.length + result.title.length + result.source.length + 12;
+          if (outputSize >= maxOutput) break;
         }
         continue;
       }
 
       sections.push("No matching sections found.");
       sections.push("");
+      outputSize += 28;
     }
   });
 
@@ -177,5 +181,5 @@ export function formatBatchQueryResults(
     sections.push(`\n> **Tip:** Results are scoped to this batch only. To search across all indexed sources, use \`ctx_search(queries: [...])\` or call ctx_batch_execute with \`query_scope: "global"\`.`);
   }
 
-  return sections;
+  return [boundResponse(sections.join("\n"), maxOutput)];
 }

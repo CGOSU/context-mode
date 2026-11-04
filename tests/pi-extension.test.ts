@@ -36,6 +36,14 @@ interface MockCommandOpts {
 function createMockPiApi() {
   const handlers: Record<string, HandlerFn[]> = {};
   const commands: Record<string, MockCommandOpts> = {};
+  const sessionFile = `pi-test-${Date.now()}-${Math.random()}`;
+  const branch: any[] = [{ id: "test-leaf" }];
+  let nextEntry = 0;
+  const context = { sessionManager: {
+    getSessionFile: () => sessionFile,
+    getLeafId: () => branch.at(-1).id,
+    getBranch: () => branch,
+  } };
 
   return {
     on: (event: string, handler: HandlerFn) => {
@@ -51,10 +59,25 @@ function createMockPiApi() {
 
     // ── Test helpers ──
     _trigger: async (event: string, ...args: any[]) => {
-      for (const h of handlers[event] ?? []) {
-        const result = await h(...args);
-        if (result) return result;
+      const id = `entry-${++nextEntry}`;
+      if (event === "tool_result") args[0] = { ...args[0], toolCallId: args[0]?.toolCallId ?? id };
+      if (event === "session_compact") {
+        branch.push({ id });
+        args[0] = { ...args[0], compactionEntry: { id } };
       }
+      let result: any;
+      for (const h of handlers[event] ?? []) {
+        result = await h(args[0], args[1] ?? context);
+        if (result) break;
+      }
+      // Match the SDK: these hooks see the old leaf; persistence follows them.
+      if (event === "before_agent_start" && args[0]?.prompt) {
+        branch.push({ id, type: "message", message: { role: "user", content: args[0].prompt } });
+      } else if (event === "tool_result") {
+        branch.push({ id, type: "message", message: { role: "toolResult", toolCallId: args[0].toolCallId } });
+        for (const h of handlers.turn_end ?? []) await h({}, args[1] ?? context);
+      }
+      return result;
     },
     _getCommand: (name: string) => commands[name],
     _handlers: handlers,
@@ -88,13 +111,19 @@ async function registerPiExtension(
 // ── Tests ───────────────────────────────────────────────────
 
 describe("Pi Extension", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), "pi-ext-test-"));
     mkdirSync(tempDir, { recursive: true });
     api = createMockPiApi();
+    // Lifecycle unit tests must not start a real MCP child. The separate bridge
+    // integration suite below owns that contract.
+    const bridge = await import("../src/adapters/pi/mcp-bridge.js");
+    vi.spyOn(bridge, "bootstrapMCPTools").mockResolvedValue({ shutdown: vi.fn(), tools: [] } as any);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await api._trigger("session_shutdown");
+    vi.restoreAllMocks();
     try {
       rmSync(tempDir, { recursive: true, force: true });
     } catch {
@@ -668,7 +697,7 @@ describe("Pi Extension", () => {
       });
       expect(result?.systemPrompt ?? null).toBe(null);
 
-      // The context hook should deliver the resume as a trailing user message.
+      // Historical context is an attributed extension message.
       const messages = [{ role: "system", content: "You are a helpful assistant." }];
       const ctxResult = await api._trigger("context", { messages });
 
@@ -678,7 +707,7 @@ describe("Pi Extension", () => {
         role: "system",
         content: "You are a helpful assistant.",
       });
-      expect(messages[1].role).toBe("user");
+      expect(messages[1].role).toBe("custom");
       expect(String(messages[1].content)).toContain("session_resume");
       expect(String(messages[1].content)).not.toContain("You are a helpful assistant.");
     });
@@ -722,7 +751,7 @@ describe("Pi Extension", () => {
       expect(messages).toHaveLength(3);
       expect(messages[0]).toEqual({ role: "system", content: "Stable system prompt." });
       expect(messages[1]).toEqual({ role: "user", content: "Continue with the refactor." });
-      expect(messages[2].role).toBe("user");
+      expect(messages[2].role).toBe("custom");
 
       const trailing = String(messages[2].content);
       expect(trailing).toContain("context-mode active");
@@ -748,6 +777,7 @@ describe("Pi Extension", () => {
         toolName: "read", input: { path: "/src/recovery-target.ts" }, result: "export const recovery = true;",
       });
       await api._trigger("session_before_compact", {});
+      await api._trigger("session_compact", {});
       await api._trigger("before_agent_start", { systemPrompt: "Stable base." });
       await api._trigger("context", { messages });
       const text = messages.map(m => Array.isArray(m.content) ? m.content.map((c: any) => c.text ?? "").join("") : m.content).join("\n");
@@ -964,7 +994,7 @@ describe("Pi Extension", () => {
 
       expect(ctxResult?.messages).toBeDefined();
       expect(ctxResult.messages.length).toBe(1);
-      expect(ctxResult.messages[0].role).toBe("user");
+      expect(ctxResult.messages[0].role).toBe("custom");
       expect(ctxResult.messages[0].content).toContain("context-mode active");
       expect(ctxResult.messages[0].content).not.toContain("ctx_batch_execute > ctx_execute > ctx_execute_file");
     });
@@ -1052,7 +1082,7 @@ describe("Pi Extension", () => {
 
       expect(ctxResult?.messages).toBeDefined();
       expect(ctxResult.messages.length).toBe(1);
-      expect(ctxResult.messages[0].role).toBe("user");
+      expect(ctxResult.messages[0].role).toBe("custom");
       // The always-on injection path fires every turn — the routing anchor
       // proves context reaches the model even with compact_count 0.
       const content = String(ctxResult.messages[0].content);

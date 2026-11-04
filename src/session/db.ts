@@ -134,6 +134,7 @@ const S = {
   getEventCount: "getEventCount",
   getLatestAttributedProject: "getLatestAttributedProject",
   checkDuplicate: "checkDuplicate",
+  checkDuplicateBySource: "checkDuplicateBySource",
   evictLowestPriority: "evictLowestPriority",
   updateMetaLastEvent: "updateMetaLastEvent",
   ensureSession: "ensureSession",
@@ -435,6 +436,14 @@ export class SessionDB extends SQLiteBase {
        WHERE recent.type = ? AND recent.data_hash = ?
        LIMIT 1`);
 
+    p(S.checkDuplicateBySource,
+      `SELECT 1 FROM (
+         SELECT type, data_hash, source_hook FROM session_events
+         WHERE session_id = ? ORDER BY id DESC LIMIT ?
+       ) AS recent
+       WHERE recent.type = ? AND recent.data_hash = ? AND recent.source_hook = ?
+       LIMIT 1`);
+
     p(S.evictLowestPriority,
       `DELETE FROM session_events WHERE id = (
          SELECT id FROM session_events WHERE session_id = ?
@@ -608,6 +617,7 @@ export class SessionDB extends SQLiteBase {
     sourceHook: string = "PostToolUse",
     attribution?: Partial<ProjectAttribution>,
     bytes?: EventBytes,
+    options?: { dedupBySource?: boolean },
   ): void {
     // SHA256-based dedup hash (first 16 hex chars = 8 bytes of entropy)
     const dataHash = createHash("sha256")
@@ -640,7 +650,11 @@ export class SessionDB extends SQLiteBase {
     // to prevent race conditions from concurrent hook calls.
     const transaction = this.db.transaction(() => {
       // Deduplication check: same type + data_hash in last N events
-      const dup = this.stmt(S.checkDuplicate).get(sessionId, DEDUP_WINDOW, event.type, dataHash);
+      // Pi branch provenance must survive identical observations on another
+      // branch. Other callers retain the existing content-only dedup policy.
+      const dup = options?.dedupBySource
+        ? this.stmt(S.checkDuplicateBySource).get(sessionId, DEDUP_WINDOW, event.type, dataHash, sourceHook)
+        : this.stmt(S.checkDuplicate).get(sessionId, DEDUP_WINDOW, event.type, dataHash);
       if (dup) return;
 
       // Enforce max events with FIFO eviction of lowest priority

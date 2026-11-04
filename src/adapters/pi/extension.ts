@@ -15,16 +15,17 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { resolveSessionDbPath, SessionDB } from "../../session/db.js";
 import type { ProjectAttribution } from "../../session/project-attribution.js";
 import { extractEvents, extractUserEvents, parsePiUsage, buildAgentUsageEvent } from "../../session/extract.js";
 import type { HookInput } from "../../session/extract.js";
-import { buildResumeSnapshot } from "../../session/snapshot.js";
 import type { SessionEvent } from "../../types.js";
 import { bootstrapMCPTools, makeBridgeDiag, isForegroundSession, type BridgeHandle } from "./mcp-bridge.js";
 import { PiAdapter } from "./index.js";
+import { PiCaptureBuffer } from "./capture.js";
 import { PI_ROUTING_ANCHOR, omitRepeatedRouting } from "./context-routing.js";
+import { autoMemoryMode, branchIds, graphObservation, historicalContext, leafId, readResume, recentBranchEvents, resultText, sourceAtEntry } from "./history.js";
 
 // ── Pi Tool Name Mapping ─────────────────────────────────
 // Pi uses lowercase; shared extractors expect PascalCase (Claude Code convention).
@@ -155,30 +156,8 @@ let _mcpBridge: BridgeHandle | null = null;
  */
 export let _mcpBridgeReady: Promise<void> = Promise.resolve();
 
-// Cached buildAutoInjection (500-token cap, prioritized).
-let _buildAutoInjection:
-  | ((events: Array<{ category: string; data: string }>) => string)
-  | null
-  | undefined = undefined;
-
-// Pending context to inject via the 'context' hook (avoiding systemPrompt mutation
-// which breaks prefix prompt cache on DeepSeek/Anthropic/OpenAI).
-// See: https://github.com/mksglu/context-mode/issues/598
-let _pendingContext = "";
-async function getAutoInjection(
-  pluginRoot: string,
-): Promise<((events: Array<{ category: string; data: string }>) => string) | null> {
-  if (_buildAutoInjection !== undefined) return _buildAutoInjection;
-  try {
-    const mod = await import(
-      pathToFileURL(join(pluginRoot, "hooks", "auto-injection.mjs")).href
-    );
-    _buildAutoInjection = mod.buildAutoInjection;
-  } catch {
-    _buildAutoInjection = null;
-  }
-  return _buildAutoInjection ?? null;
-}
+// Request-local state, checked against the session and branch again at delivery.
+let _pendingContext: { text: string; sessionId: string; entryId: string | null; resume?: string } | null = null;
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -462,11 +441,19 @@ export default function piExtension(pi: any): void {
   const _attribution: Partial<ProjectAttribution> = { projectDir, source: "workspace_root", confidence: 0.98 };
 
   const db = getOrCreateDB(projectDir);
+  const captures = new PiCaptureBuffer((capture, entryId) => {
+    const source = sourceAtEntry(capture.hook, entryId, capture.toolCallId, capture.parentToolCallId);
+    for (const event of capture.events) {
+      db.insertEvent(capture.sessionId, event, source, _attribution, undefined, { dedupBySource: true });
+    }
+  });
 
   // ── 1. session_start — Initialize session ──────────────
 
   pi.on("session_start", (_event: any, ctx: any) => {
     try {
+      captures.flush(ctx, _sessionId, true, false);
+      _pendingContext = null;
       _sessionId = deriveSessionId(ctx ?? {});
       db.ensureSession(_sessionId, projectDir);
       db.cleanupOldSessions(7);
@@ -530,7 +517,7 @@ export default function piExtension(pi: any): void {
 
   // ── 3. tool_result — PostToolUse event capture ─────────
 
-  pi.on("tool_result", (event: any) => {
+  pi.on("tool_result", (event: any, ctx: any) => {
     try {
       if (!_sessionId) return;
 
@@ -542,16 +529,12 @@ export default function piExtension(pi: any): void {
       // the extract functions expect the "mcp__" prefix for MCP tool calls.
       if (/^context_mode_/.test(rawToolName)) {
         mappedToolName = rawToolName.replace(/^context_mode_/, "mcp__context_mode__");
+      } else if (/^ctx_/.test(rawToolName)) {
+        mappedToolName = `mcp__context_mode__${rawToolName}`;
       }
 
-      // Normalize result to string
-      const rawResult = event?.result ?? event?.output;
-      const resultStr =
-        typeof rawResult === "string"
-          ? rawResult
-          : rawResult != null
-            ? JSON.stringify(rawResult)
-            : undefined;
+      captures.flush(ctx, _sessionId);
+      const resultStr = resultText(event);
 
       // Detect errors
       const hasError = Boolean(event?.error || event?.isError);
@@ -559,7 +542,7 @@ export default function piExtension(pi: any): void {
       // Pi sends file tool parameters as "path"; the extract functions
       // expect "file_path" (Claude Code convention). Normalise before
       // passing to extractEvents so file reads/writes/edits are tracked.
-      const rawInput = { ...(event?.params ?? event?.input ?? {}) };
+      const rawInput = { ...(event?.input ?? event?.params ?? event?.tool_input ?? {}) };
       if (rawInput.path !== undefined && rawInput.file_path === undefined) {
         rawInput.file_path = String(rawInput.path);
       }
@@ -573,31 +556,29 @@ export default function piExtension(pi: any): void {
 
       const events = extractEvents(hookInput);
 
-      if (events.length > 0) {
-        for (const ev of events) {
-          db.insertEvent(_sessionId, ev as SessionEvent, "PostToolUse", _attribution);
-        }
-      } else if (rawToolName) {
-        // Fallback: record unrecognized tool call as generic event
+      if (/^graph_/.test(rawToolName)) {
+        const data = graphObservation(rawToolName, event, resultStr);
+        events.push({ type: "graph_result", category: "pi", data, priority: 2 });
+      } else if (!events.length && rawToolName) {
+        // Fallback: record a bounded unrecognized tool call.
         const data = JSON.stringify({
           tool: rawToolName,
-          params: event?.params ?? event?.input,
+          params: JSON.stringify(event?.input ?? event?.params ?? {}).slice(0, 2048),
         });
-        db.insertEvent(
-          _sessionId,
-          {
-            type: "tool_call",
-            category: "pi",
-            data,
-            priority: 1,
-            data_hash: createHash("sha256")
-              .update(data)
-              .digest("hex")
-              .slice(0, 16),
-          },
-          "PostToolUse", _attribution,
-        );
+        events.push({
+          type: "tool_call",
+          category: "pi",
+          data,
+          priority: 1,
+        });
       }
+      captures.enqueue({ sessionId: _sessionId, events, hook: "PostToolUse",
+        toolCallId: typeof event?.toolCallId === "string" ? event.toolCallId : undefined,
+        parentToolCallId: typeof event?.parentToolCallId === "string" ? event.parentToolCallId : undefined,
+      }, ctx);
+      // Older hosts without ids retain searchable observations, without guessing
+      // a branch anchor from the previous leaf.
+      captures.flush(ctx, _sessionId);
     } catch {
       // Silent — session capture must never break the tool call
     }
@@ -607,7 +588,7 @@ export default function piExtension(pi: any): void {
 
   pi.on("before_agent_start", async (event: any, ctx: any) => {
     try {
-      _pendingContext = ""; // Reset — will be filled below if events exist
+      _pendingContext = null;
       // Lazily start and await the MCP bridge only when Pi is about to
       // dispatch a real agent turn. This is the non-brittle #534/#809 guard:
       // help/version/package/config CLI paths may load the extension, but they
@@ -639,113 +620,75 @@ export default function piExtension(pi: any): void {
 
       const prompt = String(event?.prompt ?? "");
 
-      // Extract user events from the prompt text
-      if (prompt) {
-        const userEvents = extractUserEvents(prompt);
-        for (const ev of userEvents) {
-          db.insertEvent(_sessionId, ev as SessionEvent, "UserPromptSubmit", _attribution);
+      // before_agent_start precedes user persistence. Never assign the new
+      // prompt to the old leaf; context will bind it to the actual user entry.
+      captures.flush(ctx, _sessionId, true);
+      if (prompt) captures.enqueue({ sessionId: _sessionId, events: extractUserEvents(prompt),
+        hook: "UserPromptSubmit", prompt,
+      }, ctx);
+
+      const parts = [PI_ROUTING_ANCHOR];
+      const mode = autoMemoryMode();
+      let resumeSnapshot: string | undefined;
+      if (mode !== "off") {
+        const resume = db.getResume(_sessionId);
+        const scopedResume = resume && !resume.consumed ? readResume(resume.snapshot, _sessionId, ctx) : null;
+        if (scopedResume) {
+          parts.push(scopedResume.context);
+          resumeSnapshot = resume!.snapshot;
+        } else if (mode === "always") {
+          // The DB has a 1000-event hard session cap. Filter branch provenance
+          // before selecting the latest 50; shared DB ordering stays unchanged.
+          const events = recentBranchEvents(db.getEvents(_sessionId), ctx, 3);
+          const memory = historicalContext(events, _sessionId, "active_memory");
+          if (memory) parts.push(memory);
         }
       }
-
-      const existingPrompt = String(event?.systemPrompt ?? "");
-      const parts: string[] = [];
-      if (existingPrompt) parts.push(existingPrompt);
-
-      // Keep only a small routing reminder here. The Pi-specific Skill is
-      // the detailed tool-selection source; tool descriptions carry API usage.
-      parts.push(PI_ROUTING_ANCHOR);
-
-      // Pi-3 + Pi-4: Always build active_memory (not just post-compact),
-      // capped at 500 tokens via buildAutoInjection. Falls back to inline
-      // budget loop if the helper is unavailable.
-      //
-      // Issue #856 — do NOT re-inject `role` as a standing behavioral_directive
-      // on every turn. A casual past phrase that classified as a role would
-      // otherwise be pinned and replayed each turn ("since you said 'that's
-      // fine for now', I'll leave it"), producing a do-nothing loop. Defense in
-      // depth: even if a stale `role` event exists (from an older build, or a
-      // genuine persona the user has since moved past), it must not become an
-      // inescapable per-turn standing order. Role events stay in the DB and
-      // remain queryable via ctx_search(source: "session-events"); intent,
-      // skills, decisions, and the resume snapshot are unaffected.
-      const activeEvents = db
-        .getEvents(_sessionId, {
-          minPriority: 3,
-          limit: 50,
-        })
-        .filter((e: any) => String(e.category ?? "") !== "role");
-      if (activeEvents.length > 0) {
-        const buildAuto = await getAutoInjection(pluginRoot);
-        let memoryContext = "";
-        if (buildAuto) {
-          memoryContext = buildAuto(
-            activeEvents.map((e: any) => ({
-              category: String(e.category ?? ""),
-              data: String(e.data ?? ""),
-            })),
-          );
-        }
-        // Fallback (or if helper produced empty output): inline 500-token cap.
-        if (!memoryContext) {
-          const memoryLines: string[] = ["<active_memory>"];
-          let budget = 2000; // ~500 tokens at 4 chars/token
-          for (const ev of activeEvents) {
-            const line = `  <event type="${ev.type}" category="${ev.category}">${ev.data}</event>`;
-            if (line.length > budget) break;
-            memoryLines.push(line);
-            budget -= line.length;
-          }
-          memoryLines.push("</active_memory>");
-          if (memoryLines.length > 2) memoryContext = memoryLines.join("\n");
-        }
-        if (memoryContext) parts.push(memoryContext);
-      }
-
-      // Resume snapshot (only when present and unconsumed).
-      const resume = db.getResume(_sessionId);
-      if (resume && !resume.consumed && resume.snapshot) {
-        parts.push(resume.snapshot);
-        db.markResumeConsumed(_sessionId);
-      }
-
-      // Store extra context (routing anchor, active_memory, resume, behavioralDirective)
-      // for injection via the 'context' hook as a message, NOT as a systemPrompt
-      // modification. Mutating systemPrompt breaks prefix prompt caching on
-      // DeepSeek/Anthropic/OpenAI because the system message sits at messages[0]
-      // and any change invalidates the entire cache chain.
-      const baseLen = existingPrompt ? 1 : 0;
-      if (parts.length > baseLen) {
-        const extraParts = parts.slice(baseLen);
-        _pendingContext = extraParts.join("\n\n");
-      } else {
-        _pendingContext = "";
-      }
+      _pendingContext = { text: parts.join("\n\n"), sessionId: _sessionId, entryId: leafId(ctx), resume: resumeSnapshot };
     } catch {
-      _pendingContext = ""; // Reset — ensure no stale data escapes
+      _pendingContext = null;
       // best effort — never break agent start
     }
   });
 
-  // ── 4a2. context — Inject active_memory + resume + behavioralDirective as message ──
-  // Uses the 'context' hook (like hindsight does) to append context at the END of
-  // messages rather than mutating systemPrompt at the beginning. This preserves
-  // prefix prompt cache for DeepSeek, Anthropic, and OpenAI.
-  pi.on("context", (event: any) => {
+  // Append a typed extension message without changing the cached system prompt.
+  // Pi converts custom messages for providers; the text itself therefore also
+  // identifies history as observations, never current user authority.
+  pi.on("context", (event: any, ctx: any) => {
     try {
-      if (!_pendingContext) return;
-      const pending = _pendingContext;
-      _pendingContext = "";
-      const ctx = omitRepeatedRouting(pending, event.messages);
-      if (!ctx) return;
+      captures.flush(ctx, _sessionId);
+      let pending = _pendingContext;
+      _pendingContext = null;
+      // Overflow recovery can compact and agent.continue() within the same run,
+      // without another before_agent_start. Deliver its scoped resume here too.
+      if (!pending && _sessionId && autoMemoryMode() !== "off") {
+        const resume = db.getResume(_sessionId);
+        const scoped = resume && !resume.consumed ? readResume(resume.snapshot, _sessionId, ctx) : null;
+        if (scoped) pending = { text: `${PI_ROUTING_ANCHOR}\n\n${scoped.context}`,
+          sessionId: _sessionId, entryId: leafId(ctx), resume: resume!.snapshot };
+      }
+      if (!pending || pending.sessionId !== _sessionId) return;
+      if (pending.entryId && !branchIds(ctx).has(pending.entryId)) return;
+      const text = omitRepeatedRouting(pending.text, event.messages);
+      if (!text) return;
       event.messages.push({
-        role: "user",
-        content: ctx,
+        role: "custom", customType: "context-mode-history", content: text,
+        display: false, timestamp: Date.now(),
+        details: { source: "context-mode", sessionId: _sessionId, entryId: pending.entryId },
       });
+      // Consume only after delivery and only the same snapshot we prepared.
+      if (pending.resume && db.getResume(_sessionId)?.snapshot === pending.resume) db.markResumeConsumed(_sessionId);
       return { messages: event.messages };
     } catch {
       // best effort — never break context assembly
     }
   });
+
+  pi.on("session_tree", (_event: any, ctx: any) => {
+    captures.flush(ctx, _sessionId, true, false);
+    _pendingContext = null;
+  });
+  pi.on("agent_end", (_event: any, ctx: any) => { captures.flush(ctx, _sessionId, true); });
 
   // ── 4b. before_provider_response — capture response metadata ───
   // Pi-2: Register the missing event so providers can record latency,
@@ -801,9 +744,10 @@ export default function piExtension(pi: any): void {
   // ai/src/types.ts:510/521 (model/usage), catalog/src/types.ts:100-145 (Usage).
   // Best-effort: parse is null-safe and the handler never throws (a telemetry
   // forwarder must never break the agent turn).
-  pi.on("turn_end", (event: any) => {
+  pi.on("turn_end", (event: any, ctx: any) => {
     try {
       if (!_sessionId) return;
+      captures.flush(ctx, _sessionId);
       const counts = parsePiUsage(event);
       if (!counts) return; // non-assistant turn or all-zero usage
       const ev = buildAgentUsageEvent(counts);
@@ -817,47 +761,42 @@ export default function piExtension(pi: any): void {
     }
   });
 
-  // ── 5. session_before_compact — Build resume snapshot ──
-
-  pi.on("session_before_compact", () => {
-    try {
-      if (!_sessionId) return;
-
-      const allEvents = db.getEvents(_sessionId);
-      if (allEvents.length === 0) return;
-
-      const stats = db.getSessionStats(_sessionId);
-      const snapshot = buildResumeSnapshot(allEvents, {
-        compactCount: (stats?.compact_count ?? 0) + 1,
-      });
-
-      db.upsertResume(_sessionId, snapshot, allEvents.length);
-    } catch {
-      // best effort — never break compaction
-    }
+  // Native compaction owns the actual summary. Build a small, scoped history
+  // only after it succeeds; failed/aborted preparation cannot produce a resume.
+  pi.on("session_before_compact", (_event: any, ctx: any) => {
+    captures.flush(ctx, _sessionId);
+    _pendingContext = null;
   });
-
-  // ── 6. session_compact — Increment compact counter ─────
-
-  pi.on("session_compact", () => {
+  pi.on("session_compact", (event: any, ctx: any) => {
     try {
       if (!_sessionId) return;
+      _pendingContext = null;
+      captures.flush(ctx, _sessionId);
       db.incrementCompactCount(_sessionId);
+      if (autoMemoryMode() === "off") return;
+      const entryId = event?.compactionEntry?.id ?? leafId(ctx);
+      if (typeof entryId !== "string" || !branchIds(ctx).has(entryId)) return;
+      const events = recentBranchEvents(db.getEvents(_sessionId), ctx, 1);
+      const context = historicalContext(events, _sessionId, "session_resume");
+      if (!context) return;
+      db.upsertResume(_sessionId, JSON.stringify({ version: 1, sessionId: _sessionId, entryId, context }), events.length);
     } catch {
-      // best effort
+      // best effort — native compaction remains authoritative
     }
   });
 
   // ── 7. session_shutdown — Cleanup old sessions ─────────
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event: any, ctx: any) => {
     try {
+      captures.flush(ctx, _sessionId, true);
       if (_db) {
         _db.cleanupOldSessions(7);
       }
       _db = null;
       _dbPath = "";
       _sessionId = "";
+      _pendingContext = null;
     } catch {
       // best effort — never throw during shutdown
     }

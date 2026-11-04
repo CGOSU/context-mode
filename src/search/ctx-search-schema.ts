@@ -89,9 +89,12 @@ export function buildCtxSearchInputSchema(isSharedMode: boolean) {
     // Fixes #627.
     limit: z
       .coerce.number()
+      .int().min(1).max(20)
       .optional()
       .default(3)
       .describe("Results per query (default: 3)"),
+    maxOutputChars: z.coerce.number().int().min(1000).max(40 * 1024).optional()
+      .describe("Total response character budget (Pi default: 12000). Full evidence stays indexed; use a source filter for focused expansion."),
     source: z
       .string()
       .optional()
@@ -105,8 +108,8 @@ export function buildCtxSearchInputSchema(isSharedMode: boolean) {
       .optional()
       .default("relevance")
       .describe(
-        "Sort mode. 'relevance' (default): BM25 ranked, current session only. " +
-          "'timeline': chronological across current session, prior sessions, and auto-memory.",
+        "Sort mode. 'relevance' (default): BM25 ranked indexed content, including retained prior executions. " +
+          "'timeline': chronological across indexed content, captured sessions, and auto-memory.",
       ),
     ...projectField,
   });

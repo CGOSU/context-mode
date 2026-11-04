@@ -5,6 +5,7 @@ import { buildCtxSearchInputSchema, CTX_SEARCH_SHARED_MODE, resolveProjectScope 
 import { FloodGuard } from "./search/flood-guard.js";
 import { resolveClaudeConfigDir } from "./util/claude-config.js";
 import { extractSnippet } from "./server-snippets.js";
+import { boundResponse, resolveResponseBudget } from "./response-budget.js";
 import type { ServerToolContext } from "./server.js";
 
 export function registerSearchTool(context: ServerToolContext): void {
@@ -83,7 +84,7 @@ WHEN:
   - You want to recall something that exists in storage (recently indexed content, prior session events, auto-memory) instead of re-reading raw sources
   - You have multiple related questions about the same body of knowledge — batch every question into one call (the ranking pipeline runs per-query but the round-trip cost is paid once)
   - You want to scope the query to one labelled source (pass \`source\` — partial match is fine)
-  - You want a chronological view across current session + prior sessions + persistent auto-memory (pass \`sort: "timeline"\` — the default \`relevance\` mode only ranks within the current session)
+  - You want a chronological view across indexed content + captured sessions + persistent auto-memory (pass \`sort: "timeline"\` — the default \`relevance\` mode ranks indexed content, which may include prior executions)
   - You want to filter ranked results by content shape (pass \`contentType: "code"\` to surface implementation snippets or \`contentType: "prose"\` to surface explanations)
 
 WHEN NOT:
@@ -183,7 +184,9 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
         ? 1 // after soft cap: only 1 result per query
         : limit; // normal: honor the declared default and explicit limit
 
-      const MAX_TOTAL = 40 * 1024; // 40KB total cap
+      const MAX_TOTAL = resolveResponseBudget(
+        raw.maxOutputChars as number | undefined, server.server.getClientVersion(),
+      );
       let totalSize = 0;
       const sections: string[] = [];
 
@@ -220,9 +223,9 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
       try {
         store.withSearchBatch((search) => {
           for (const q of queryList) {
-            if (totalSize > MAX_TOTAL) {
-              sections.push(`## ${q}\n(output cap reached)\n`);
-              continue;
+            if (totalSize >= MAX_TOTAL) {
+              sections.push("(output cap reached) Remaining queries omitted; narrow queries and source.");
+              break;
             }
 
             let results;
@@ -253,23 +256,25 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
             }
 
             if (results.length === 0) {
-              sections.push(`## ${q}\nNo results found.`);
+              const empty = `## ${boundResponse(q, 200, "… (query abbreviated)")}\nNo results found.`;
+              sections.push(empty);
+              totalSize += empty.length + 7;
               continue;
             }
 
             const formatted = results
               .map((r, i) => {
-                const origin = (r as any).origin || "current-session";
+                const origin = (r as any).origin || "indexed-content";
                 const ts = (r as any).timestamp ? (r as any).timestamp.slice(0, 16).replace("T", " ") : "";
-                const header = `--- [${origin}${ts ? " | " + ts : ""} | ${r.source}] ---`;
-                const heading = `### ${r.title}`;
+                const header = `--- [${origin}${ts ? " | " + ts : ""} | ${boundResponse(r.source, 300, "… (source abbreviated)")}] ---`;
+                const heading = `### ${boundResponse(r.title, 200, "… (title abbreviated)")}`;
                 const snippet = extractSnippet(r.content, q, 1500, r.highlighted);
                 return `${header}\n${heading}\n\n${snippet}`;
               })
               .join("\n\n");
 
-            sections.push(`## ${q}\n\n${formatted}`);
-            totalSize += formatted.length;
+            sections.push(`## ${boundResponse(q, 200, "… (query abbreviated)")}\n\n${formatted}`);
+            totalSize += q.length + formatted.length + 12;
           }
         });
       } finally {
@@ -310,8 +315,8 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
       }
 
       return trackResponse("ctx_search", {
-        content: [{ type: "text" as const, text: output }],
-      });
+        content: [{ type: "text" as const, text: boundResponse(output, MAX_TOTAL) }],
+      }, MAX_TOTAL);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       return trackResponse("ctx_search", {

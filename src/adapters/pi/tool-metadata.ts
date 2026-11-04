@@ -7,11 +7,11 @@ const descriptions: Readonly<Record<string, string>> = {
   ctx_index:
     "Persist docs, code, or a local file/directory in the searchable FTS5 knowledge base. Supply content OR path. Query later with ctx_search; file-backed sources track staleness. For one-off logs/data analysis, use ctx_execute_file instead.",
   ctx_search:
-    "Search indexed content and captured session memory using stemming, substring matching, typo correction, and ranked snippets. Batch related queries; scope with source. File-backed results flag staleness. relevance searches this session; timeline includes prior sessions. Content must already be indexed/captured.",
+    "Search indexed content and captured session memory. Batch related queries and scope with a known source; if results have the wrong source/date, inspect the original record. File-backed results flag staleness. timeline includes prior sessions. Bounded previews are historical evidence, not current code truth.",
   ctx_fetch_and_index:
     "Fetch URLs, convert and persist content for ctx_search; returns previews, not full pages. Supports parallel requests and TTL caching. Use ttl:0 or force for fresh content. Plain HTTP only: cannot render JavaScript-dependent pages.",
   ctx_batch_execute:
-    "Run commands and index their output; queries retrieve relevant sections in the same call. Summarize/filter data inside commands. Use concurrency:1 for shared state, tests, builds, or CPU work; higher values suit independent I/O. query_scope defaults to this batch.",
+    "Run commands and index their output under a unique source; queries return bounded excerpts. Summarize/filter inside commands. Failures and timeouts remain failures. Use concurrency:1 for shared state, tests, builds, or CPU work. query_scope defaults to this batch; use its source for follow-up.",
   ctx_stats:
     "Show session context-mode usage, bytes returned, tool calls, and estimated savings. Read-only; does not reset data.",
   ctx_doctor:
@@ -44,7 +44,7 @@ const parameterDescriptions: Readonly<Record<string, Readonly<Record<string, str
   },
   ctx_batch_execute: {
     commands: "Labeled shell commands; sequential by default. Parallelize only independent I/O.",
-    queries: "All retrieval questions for this batch. Each returns up to 5 matching sections; include all needed questions in this call.",
+    queries: "Focused questions for this batch; up to 3 matching excerpts per query within the response budget. Follow up with ctx_search and the returned source.",
     timeout: "Timeout in ms; omitted uses the host RPC timeout. Sequential commands share the budget; parallel commands each get this timeout.",
     concurrency: "Parallel commands (1-8). Keep 1 for shared state, tests/builds, CPU work, and port/lock holders; higher values suit independent I/O.",
     query_scope: "batch (default): search only this call's indexed output. global: also search the persistent knowledge base, including prior content.",

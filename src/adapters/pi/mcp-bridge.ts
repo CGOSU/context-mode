@@ -326,7 +326,9 @@ export async function bootstrapMCPTools(
         }
         return {
           content: [{ type: "text", text }],
-          details: {},
+          // Preserve execution/background and batch outcome metadata. Error
+          // status and recall sources remain in the thrown diagnostic above.
+          details: result.structuredContent ?? {},
         };
       },
     });

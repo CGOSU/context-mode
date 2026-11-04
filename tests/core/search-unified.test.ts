@@ -80,7 +80,7 @@ describe("sort=relevance returns ContentStore only", () => {
 
     // Should have results from ContentStore only
     expect(results.length).toBeGreaterThan(0);
-    expect(results.every(r => r.origin === "current-session")).toBe(true);
+    expect(results.every(r => r.origin === "indexed-content")).toBe(true);
   });
 });
 
@@ -123,7 +123,7 @@ describe("sort=timeline merges 3 sources chronologically", () => {
 
     // Should have results from multiple origins
     const origins = new Set(results.map(r => r.origin));
-    expect(origins.has("current-session")).toBe(true);
+    expect(origins.has("indexed-content")).toBe(true);
     // SessionDB or auto-memory should also appear
     expect(origins.size).toBeGreaterThanOrEqual(2);
   });
@@ -184,7 +184,7 @@ describe("error in one source doesn't break others", () => {
     });
 
     expect(results.length).toBeGreaterThan(0);
-    expect(results.every(r => r.origin === "current-session")).toBe(true);
+    expect(results.every(r => r.origin === "indexed-content")).toBe(true);
   });
 
   test("nonexistent configDir still returns other source results", () => {
@@ -286,7 +286,7 @@ describe("default sort is relevance (backward compatible)", () => {
 
     // Should only have ContentStore results (relevance mode)
     expect(results.length).toBeGreaterThan(0);
-    expect(results.every(r => r.origin === "current-session")).toBe(true);
+    expect(results.every(r => r.origin === "indexed-content")).toBe(true);
   });
 });
 

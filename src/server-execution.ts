@@ -1,11 +1,13 @@
 import { z } from "zod";
-import { classifyNonZeroExit } from "./exit-classify.js";
+import { createExecutionSource } from "./execution-source.js";
+import { executionResponse } from "./execution-response.js";
+import { resolveResponseBudget } from "./response-budget.js";
 import { coerceBoolean } from "./server-input.js";
 import { resolveExecTimeout, buildExecuteEcho } from "./server-execution-options.js";
 import type { ServerToolContext } from "./server.js";
 
 export function registerExecutionTools(context: ServerToolContext): void {
-  const { server, bunNote, langList, checkDenyPolicy, checkNonShellDenyPolicy, executor, sessionStats, trackResponse, trackIndexed, getStore, currentAttribution, checkProjectBoundary, checkFilePathDenyPolicy } = context;
+  const { server, bunNote, langList, checkDenyPolicy, checkNonShellDenyPolicy, executor, sessionStats, trackResponse, currentAttribution, checkProjectBoundary, checkFilePathDenyPolicy } = context;
 
 
 // ─────────────────────────────────────────────────────────
@@ -97,6 +99,8 @@ EXAMPLE: ctx_execute(language: "javascript", code: "const out = require('child_p
         .string()
         .optional()
         .describe("Optional working directory for shell commands. Non-shell languages still execute from their sandbox temp directory."),
+      maxOutputChars: z.coerce.number().int().min(1000).max(80 * 1024).optional()
+        .describe("Maximum response characters, including status and recall pointer. Pi defaults to 12000; full captured output is indexed before preview truncation."),
       intent: z
         .string()
         .optional()
@@ -108,7 +112,7 @@ EXAMPLE: ctx_execute(language: "javascript", code: "const out = require('child_p
         ),
     }),
   },
-  async ({ language, code, timeout, background, cwd, intent }) => {
+  async ({ language, code, timeout, background, cwd, intent, maxOutputChars }) => {
     // Security: deny-only firewall
     if (language === "shell") {
       const denied = checkDenyPolicy(code, "execute");
@@ -117,6 +121,14 @@ EXAMPLE: ctx_execute(language: "javascript", code: "const out = require('child_p
       const denied = checkNonShellDenyPolicy(code, language, "execute");
       if (denied) return denied;
     }
+
+    const clientInfo = server.server.getClientVersion();
+    const attribution = currentAttribution();
+    const responseOptions = {
+      language, source: createExecutionSource(`execute:${language}`, attribution?.sessionId), attribution,
+      echo: buildExecuteEcho(language, code, undefined, clientInfo), intent,
+      timeout: resolveExecTimeout(timeout), maxChars: resolveResponseBudget(maxOutputChars, clientInfo),
+    };
 
     try {
       // For JS/TS: wrap in async IIFE with fetch + http/https interceptors to track network bytes
@@ -186,13 +198,8 @@ ${code}
 __cm_main().catch(e=>{console.error(e);process.exitCode=1});${background ? '\nsetInterval(()=>{},2147483647);' : ''}
 })(typeof require!=='undefined'?require:null);`;
       }
-      const effTimeout = resolveExecTimeout(timeout);
+      const effTimeout = responseOptions.timeout;
       const result = await executor.execute({ language, code: instrumentedCode, timeout: effTimeout, background, cwd });
-
-      // Echo the executed source code before stdout so users can audit
-      // and tooling can block command patterns (Issues #717 + #736).
-      // Built from the user-supplied `code`, NOT the instrumented variant.
-      const echo = buildExecuteEcho(language, code, undefined, server.server.getClientVersion());
 
       // Parse sandbox network metrics from stderr
       const netMatch = result.stderr?.match(/__CM_NET__:(\d+)/);
@@ -209,203 +216,15 @@ __cm_main().catch(e=>{console.error(e);process.exitCode=1});${background ? '\nse
         result.stderr = result.stderr.replace(/\n?__CM_FS__:\d+\n?/g, "");
       }
 
-      if (result.timedOut) {
-        const partialOutput = result.stdout?.trim();
-        if (result.backgrounded && partialOutput) {
-          // Background mode: process is still running, return partial output as success
-          return trackResponse("ctx_execute", {
-            content: [
-              {
-                type: "text" as const,
-                text: `${echo}${partialOutput}\n\n_(process backgrounded after ${effTimeout}ms — still running)_`,
-              },
-            ],
-          });
-        }
-        if (partialOutput) {
-          // Timeout with partial output — return as success with note
-          return trackResponse("ctx_execute", {
-            content: [
-              {
-                type: "text" as const,
-                text: `${echo}${partialOutput}\n\n_(timed out after ${effTimeout}ms — partial output shown above)_`,
-              },
-            ],
-          });
-        }
-        return trackResponse("ctx_execute", {
-          content: [
-            {
-              type: "text" as const,
-              text: `${echo}Execution timed out after ${effTimeout}ms\n\nstderr:\n${result.stderr}`,
-            },
-          ],
-          isError: true,
-        });
-      }
-
-      if (result.exitCode !== 0) {
-        const { isError, output } = classifyNonZeroExit({
-          language, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr,
-        });
-        if (intent && intent.trim().length > 0 && Buffer.byteLength(output) > INTENT_SEARCH_THRESHOLD) {
-          trackIndexed(Buffer.byteLength(output));
-          return trackResponse("ctx_execute", {
-            content: [
-              { type: "text" as const, text: `${echo}${intentSearch(output, intent, isError ? `execute:${language}:error` : `execute:${language}`)}` },
-            ],
-            isError,
-          });
-        }
-        // Auto-index large error output into FTS5 — no data loss
-        if (Buffer.byteLength(output) > LARGE_OUTPUT_THRESHOLD) {
-          trackIndexed(Buffer.byteLength(output));
-          return trackResponse("ctx_execute", {
-            content: [
-              { type: "text" as const, text: `${echo}${intentSearch(output, "errors failures exceptions", isError ? `execute:${language}:error` : `execute:${language}`)}` },
-            ],
-            isError,
-          });
-        }
-        return trackResponse("ctx_execute", {
-          content: [
-            { type: "text" as const, text: `${echo}${output}` },
-          ],
-          isError,
-        });
-      }
-
-      const stdout = result.stdout || "(no output)";
-
-      // Intent-driven search: if intent provided and output is large enough
-      if (intent && intent.trim().length > 0 && Buffer.byteLength(stdout) > INTENT_SEARCH_THRESHOLD) {
-        trackIndexed(Buffer.byteLength(stdout));
-        return trackResponse("ctx_execute", {
-          content: [
-            { type: "text" as const, text: `${echo}${intentSearch(stdout, intent, `execute:${language}`)}` },
-          ],
-        });
-      }
-
-      // Auto-index large stdout into FTS5 — return pointer, not raw content
-      if (Buffer.byteLength(stdout) > LARGE_OUTPUT_THRESHOLD) {
-        const indexed = indexStdout(stdout, `execute:${language}`);
-        // Prepend echo to the first text content so provenance still surfaces
-        const echoed = {
-          ...indexed,
-          content: indexed.content.map((c, i) =>
-            i === 0 && c.type === "text"
-              ? { ...c, text: `${echo}${(c as { text: string }).text}` }
-              : c,
-          ),
-        };
-        return trackResponse("ctx_execute", echoed);
-      }
-
-      return trackResponse("ctx_execute", {
-        content: [
-          { type: "text" as const, text: `${echo}${stdout}` },
-        ],
-      });
+      return trackResponse("ctx_execute", executionResponse(context, result, responseOptions), responseOptions.maxChars);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      return trackResponse("ctx_execute", {
-        content: [
-          { type: "text" as const, text: `Runtime error: ${message}` },
-        ],
-        isError: true,
-      });
+      return trackResponse("ctx_execute", executionResponse(context, {
+        stdout: "", stderr: "", exitCode: 1, timedOut: false,
+      }, { ...responseOptions, runtimeError: message }), responseOptions.maxChars);
     }
   },
 );
-
-
-// ─────────────────────────────────────────────────────────
-// Helper: index stdout into FTS5 knowledge base
-// ─────────────────────────────────────────────────────────
-
-function indexStdout(
-  stdout: string,
-  source: string,
-): { content: Array<{ type: "text"; text: string }> } {
-  const store = getStore();
-  trackIndexed(Buffer.byteLength(stdout));
-  const indexed = store.index({ content: stdout, source, attribution: currentAttribution() });
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: `Indexed ${indexed.totalChunks} sections (${indexed.codeChunks} with code) from: ${indexed.label}\nUse ctx_search(queries: ["..."]) to query this content. Use source: "${indexed.label}" to scope results.`,
-      },
-    ],
-  };
-}
-
-
-// ─────────────────────────────────────────────────────────
-// Helper: intent-driven search on execution output
-// ─────────────────────────────────────────────────────────
-
-const INTENT_SEARCH_THRESHOLD = 5_000;
- // bytes — ~80-100 lines
-const LARGE_OUTPUT_THRESHOLD = 102_400;
- // 100KB — auto-index into FTS5, return pointer
-
-function intentSearch(
-  stdout: string,
-  intent: string,
-  source: string,
-  maxResults: number = 5,
-): string {
-  const totalLines = stdout.split("\n").length;
-  const totalBytes = Buffer.byteLength(stdout);
-
-  // Index into the PERSISTENT store so user can ctx_search() later
-  const persistent = getStore();
-  const indexed = persistent.indexPlainText(stdout, source, undefined, currentAttribution());
-
-  // Search the persistent store directly (porter → trigram → fuzzy)
-  let results = persistent.searchWithFallback(intent, maxResults, source);
-
-  // Extract distinctive terms as vocabulary hints for the LLM
-  const distinctiveTerms = persistent.getDistinctiveTerms(indexed.sourceId);
-
-  if (results.length === 0) {
-    const lines = [
-      `Indexed ${indexed.totalChunks} sections from "${source}" into knowledge base.`,
-      `No sections matched intent "${intent}" in ${totalLines}-line output (${(totalBytes / 1024).toFixed(1)}KB).`,
-    ];
-    if (distinctiveTerms.length > 0) {
-      lines.push("");
-      lines.push(`Searchable terms: ${distinctiveTerms.join(", ")}`);
-    }
-    lines.push("");
-    lines.push("Use ctx_search(queries: [...]) to explore the indexed content.");
-    return lines.join("\n");
-  }
-
-  // Return ONLY titles + first-line previews — not full content
-  const lines = [
-    `Indexed ${indexed.totalChunks} sections from "${source}" into knowledge base.`,
-    `${results.length} sections matched "${intent}" (${totalLines} lines, ${(totalBytes / 1024).toFixed(1)}KB):`,
-    "",
-  ];
-
-  for (const r of results) {
-    const preview = r.content.split("\n")[0].slice(0, 120);
-    lines.push(`  - ${r.title}: ${preview}`);
-  }
-
-  if (distinctiveTerms.length > 0) {
-    lines.push("");
-    lines.push(`Searchable terms: ${distinctiveTerms.join(", ")}`);
-  }
-
-  lines.push("");
-  lines.push("Use ctx_search(queries: [...]) to retrieve full content of any section.");
-
-  return lines.join("\n");
-}
 
 
 // ─────────────────────────────────────────────────────────
@@ -475,6 +294,8 @@ EXAMPLE: ctx_execute_file(path: "data.csv", language: "javascript", code: "const
         .coerce.number()
         .optional()
         .describe("Max execution time in ms. When omitted, no server-side timer fires — the MCP host's RPC timeout governs."),
+      maxOutputChars: z.coerce.number().int().min(1000).max(80 * 1024).optional()
+        .describe("Maximum response characters, including status and recall pointer. Pi defaults to 12000; full captured output is indexed before preview truncation."),
       intent: z
         .string()
         .optional()
@@ -484,7 +305,7 @@ EXAMPLE: ctx_execute_file(path: "data.csv", language: "javascript", code: "const
         ),
     }),
   },
-  async ({ path, language, code, timeout, intent }) => {
+  async ({ path, language, code, timeout, intent, maxOutputChars }) => {
     // Security (#852): confine the processed file to the project root so
     // ctx_execute_file cannot be used to escape the host's sandbox/permission
     // controls. Runs before the deny-glob check — boundary first, then policy.
@@ -504,8 +325,16 @@ EXAMPLE: ctx_execute_file(path: "data.csv", language: "javascript", code: "const
       if (codeDenied) return codeDenied;
     }
 
+    const clientInfo = server.server.getClientVersion();
+    const attribution = currentAttribution();
+    const responseOptions = {
+      language, source: createExecutionSource(`file:${path}`, attribution?.sessionId), attribution,
+      echo: buildExecuteEcho(language, code, path, clientInfo), intent,
+      timeout: resolveExecTimeout(timeout), maxChars: resolveResponseBudget(maxOutputChars, clientInfo),
+    };
+
     try {
-      const effTimeout = resolveExecTimeout(timeout);
+      const effTimeout = responseOptions.timeout;
       const result = await executor.executeFile({
         path,
         language,
@@ -513,91 +342,12 @@ EXAMPLE: ctx_execute_file(path: "data.csv", language: "javascript", code: "const
         timeout: effTimeout,
       });
 
-      // Echo path + executed source code before stdout for audit/debug
-      // (Issues #717 + #736).
-      const echo = buildExecuteEcho(language, code, path, server.server.getClientVersion());
-
-      if (result.timedOut) {
-        return trackResponse("ctx_execute_file", {
-          content: [
-            {
-              type: "text" as const,
-              text: `${echo}Timed out processing ${path} after ${effTimeout}ms`,
-            },
-          ],
-          isError: true,
-        });
-      }
-
-      if (result.exitCode !== 0) {
-        const { isError, output } = classifyNonZeroExit({
-          language, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr,
-        });
-        if (intent && intent.trim().length > 0 && Buffer.byteLength(output) > INTENT_SEARCH_THRESHOLD) {
-          trackIndexed(Buffer.byteLength(output));
-          return trackResponse("ctx_execute_file", {
-            content: [
-              { type: "text" as const, text: `${echo}${intentSearch(output, intent, isError ? `file:${path}:error` : `file:${path}`)}` },
-            ],
-            isError,
-          });
-        }
-        // Auto-index large error output into FTS5 — no data loss
-        if (Buffer.byteLength(output) > LARGE_OUTPUT_THRESHOLD) {
-          trackIndexed(Buffer.byteLength(output));
-          return trackResponse("ctx_execute_file", {
-            content: [
-              { type: "text" as const, text: `${echo}${intentSearch(output, "errors failures exceptions", isError ? `file:${path}:error` : `file:${path}`)}` },
-            ],
-            isError,
-          });
-        }
-        return trackResponse("ctx_execute_file", {
-          content: [
-            { type: "text" as const, text: `${echo}${output}` },
-          ],
-          isError,
-        });
-      }
-
-      const stdout = result.stdout || "(no output)";
-
-      if (intent && intent.trim().length > 0 && Buffer.byteLength(stdout) > INTENT_SEARCH_THRESHOLD) {
-        trackIndexed(Buffer.byteLength(stdout));
-        return trackResponse("ctx_execute_file", {
-          content: [
-            { type: "text" as const, text: `${echo}${intentSearch(stdout, intent, `file:${path}`)}` },
-          ],
-        });
-      }
-
-      // Auto-index large stdout into FTS5 — return pointer, not raw content
-      if (Buffer.byteLength(stdout) > LARGE_OUTPUT_THRESHOLD) {
-        const indexed = indexStdout(stdout, `file:${path}`);
-        const echoed = {
-          ...indexed,
-          content: indexed.content.map((c, i) =>
-            i === 0 && c.type === "text"
-              ? { ...c, text: `${echo}${(c as { text: string }).text}` }
-              : c,
-          ),
-        };
-        return trackResponse("ctx_execute_file", echoed);
-      }
-
-      return trackResponse("ctx_execute_file", {
-        content: [
-          { type: "text" as const, text: `${echo}${stdout}` },
-        ],
-      });
+      return trackResponse("ctx_execute_file", executionResponse(context, result, responseOptions), responseOptions.maxChars);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      return trackResponse("ctx_execute_file", {
-        content: [
-          { type: "text" as const, text: `Runtime error: ${message}` },
-        ],
-        isError: true,
-      });
+      return trackResponse("ctx_execute_file", executionResponse(context, {
+        stdout: "", stderr: "", exitCode: 1, timedOut: false,
+      }, { ...responseOptions, runtimeError: message }), responseOptions.maxChars);
     }
   },
 );

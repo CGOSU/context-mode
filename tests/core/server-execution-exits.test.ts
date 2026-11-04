@@ -8,21 +8,21 @@ import { classifyNonZeroExit } from "../../src/exit-classify.js";
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 1. Non-zero Exit Code Classification (soft-fail)
+// 1. Non-zero Exit Code Classification (preserve failures)
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Non-zero Exit Code Classification", () => {
-  // ── Soft-fail: shell + exit 1 + stdout present ──
+  // Shell exit 1 cannot distinguish grep no-match from failed tests.
 
-  test("shell exit 1 with stdout → not an error (grep no-match pattern)", () => {
+  test("shell exit 1 with stdout remains an error", () => {
     const result = classifyNonZeroExit({
       language: "shell",
       exitCode: 1,
       stdout: "file1.ts:10: writeRouting\nfile2.ts:20: writeRouting",
       stderr: "",
     });
-    expect(result.isError).toBe(false);
-    expect(result.output).toBe("file1.ts:10: writeRouting\nfile2.ts:20: writeRouting");
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("file1.ts:10: writeRouting\nfile2.ts:20: writeRouting");
   });
 
   test("shell exit 1 with empty stdout → real error", () => {
@@ -105,15 +105,17 @@ describe("Non-zero Exit Code Classification", () => {
 
   // ── Output format ──
 
-  test("soft-fail output is clean stdout (no 'Exit code:' prefix)", () => {
+  test("failed shell tests preserve exit code and stderr even with stdout", () => {
     const result = classifyNonZeroExit({
       language: "shell",
       exitCode: 1,
-      stdout: "matched line",
-      stderr: "",
+      stdout: "1 test failed",
+      stderr: "AssertionError: expected true",
     });
-    expect(result.output).not.toContain("Exit code:");
-    expect(result.output).toBe("matched line");
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("Exit code: 1");
+    expect(result.output).toContain("1 test failed");
+    expect(result.output).toContain("AssertionError: expected true");
   });
 
   test("hard error output includes exit code, stdout, and stderr", () => {
