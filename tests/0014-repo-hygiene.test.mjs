@@ -580,6 +580,25 @@ describe("ADR-0013 repo: scheduled workflows", () => {
   const read = (p) => readFileSync(root + p, "utf8");
   const lines = (s) => s.split("\n").map((l) => l.trim());
 
+  test("upstream side-effect automations gate every job before running in a fork", () => {
+    const upstream = "github.repository == 'mksglu/context-mode'";
+    const workflows = {
+      "issue-intake.yml": { check: upstream + " && !github.event.issue.pull_request" },
+      "weekly.yml": { weekly: upstream },
+      "readme-stats.yml": { capture: upstream, "readme-stats": upstream + " && github.ref == 'refs/heads/main'" },
+    };
+    for (const [file, expected] of Object.entries(workflows)) {
+      const body = read(".github/workflows/" + file).split("\njobs:\n")[1];
+      assert.ok(body, file + " has jobs");
+      const jobs = [...body.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|(?![\s\S]))/gm)];
+      assert.deepEqual(jobs.map((job) => job[1]), Object.keys(expected), file + " has no unguarded extra job");
+      for (const [, name, job] of jobs) {
+        const gates = job.split("\n").filter((line) => line.startsWith("    if:"));
+        assert.deepEqual(gates, ["    if: ${{ " + expected[name] + " }}"], file + "/" + name + " has its upstream guard at job scope and retains prior conditions");
+      }
+    }
+  });
+
   test("weekly.yml: schedule, dispatch, one job", () => {
     const y = read(".github/workflows/weekly.yml");
     const l = lines(y);
@@ -2164,7 +2183,7 @@ describe("ADR-0015 repo: README stats job and brand (D-README-STATS-1)", () => {
 
   test("readme-stats.yml: capture job daily, on each v2-design push and by hand; README job main only; commits only on change (D-README-STATS-1, D-README-HISTORY-1)", () => {
     const y = readRepo(".github/workflows/readme-stats.yml");
-    for (const need of ["schedule:", "cron:", "workflow_dispatch:", "contents: write", "secrets.GITHUB_TOKEN", "if: github.ref == 'refs/heads/main'",
+    for (const need of ["schedule:", "cron:", "workflow_dispatch:", "contents: write", "secrets.GITHUB_TOKEN", "if: ${{ github.repository == 'mksglu/context-mode' && github.ref == 'refs/heads/main' }}",
       "build/readme-stats.mjs", "render.mjs star-history", "git diff --quiet", "PLAYWRIGHT_DIR",
       "push:", "branches: [v2-design]", "paths-ignore:", "concurrency:", "node build/readme-stats.mjs --history"]) assert.ok(y.includes(need), `readme-stats.yml lacks ${need}`);
     assert.ok(!y.includes("curl "), "readme-stats.yml has curl");

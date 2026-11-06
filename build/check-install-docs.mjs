@@ -266,10 +266,14 @@ export function docFiles(repo) {
   return [...top, ...docs, ...walk(path.join(repo, "docs", "install"), [".md"]), ...walk(path.join(repo, "skills"), [".md"])];
 }
 
-/** Files that must not name v1. */
+// Maintainer-owned project memory records migration history and exact rollback paths.
+// These four AGENTS.md locations are not installation instructions.
+const PROJECT_MEMORY_DOCS = new Set(["current-state.md", "decisions.md", "session-log.md", "pitfalls.md"]);
+
+/** User-facing files that must not name v1; project memory preserves historical facts. */
 export function v1FreeFiles(repo) {
   const top = ["README.md", "CONTRIBUTING.md"].map((f) => path.join(repo, f)).filter(existsSync);
-  const docs = readdirSync(path.join(repo, "docs")).filter((f) => f.endsWith(".md")).sort().map((f) => path.join(repo, "docs", f));
+  const docs = readdirSync(path.join(repo, "docs")).filter((f) => f.endsWith(".md") && !PROJECT_MEMORY_DOCS.has(f)).sort().map((f) => path.join(repo, "docs", f));
   return [...top, ...docs, ...walk(path.join(repo, "docs", "install"), [".md"]), ...walk(path.join(repo, "skills"), [".md"]),
     ...walk(path.join(repo, "src", "prompt"), [".md"]), ...walk(path.join(repo, "e2e", "golden", "cli"), [".txt"]), ...walk(path.join(repo, ".github", "ISSUE_TEMPLATE"), [".yml", ".yaml", ".md"])];
 }

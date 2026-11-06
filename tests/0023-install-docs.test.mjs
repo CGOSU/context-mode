@@ -424,6 +424,10 @@ describe("ADR-0023 no v1 text in docs", { concurrency: CONC }, () => {
 
   test("v1-out: the file list covers README, install docs, prompts and issue templates, not benchmarks or docs/architecture", () => {
     const files = v1FreeFiles(REPO).map((f) => path.relative(REPO, f).split(path.sep).join("/"));
+    assert.ok(files.includes("docs/tools.md"), "ordinary product docs remain checked");
+    for (const memory of ["current-state.md", "decisions.md", "session-log.md", "pitfalls.md"]) {
+      assert.ok(!files.includes("docs/" + memory), "maintainer history may name the exact legacy branch and backup path");
+    }
     for (const must of ["README.md", "docs/install/README.md", "docs/install/codex.md", "src/prompt/instructions.md", ".github/ISSUE_TEMPLATE/bug.yml", "e2e/golden/cli/help-main.txt"]) assert.ok(files.includes(must), must);
     assert.ok(files.every((f) => !f.startsWith("bench/evidence/") && !f.startsWith("docs/architecture/")), files.join(","));
   });

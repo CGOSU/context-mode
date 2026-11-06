@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   check:
-    if: ${{ !github.event.issue.pull_request }}
+    if: ${{ github.repository == 'mksglu/context-mode' && !github.event.issue.pull_request }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

@@ -25,6 +25,15 @@ Validated with Node 26.11.1 and installed Pi 1.5.0:
 Local operator records and the backup location are in `docs/session-log.md`.
 The current interactive Pi process was not restarted by the migration.
 
+## Branches
+
+`main` is the maintained v2 line. `codex/v1-legacy` preserves the old v1 line.
+The branch promotion keeps both worktree directories in place, so existing local
+Pi package paths remain valid. A fresh Git source checkout still needs the build
+below before Pi can load its resources. Upstream issue-commenting, README-stat
+commits and weekly maintenance jobs run only in `mksglu/context-mode`; normal fork
+CI remains enabled on `main`.
+
 ## Build and select one package
 
 Use Node 24.15 or later. In this checkout:

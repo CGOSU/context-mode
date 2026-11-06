@@ -130,6 +130,9 @@ const ALLOWED_FILES = [
   ".claude/settings.json",
   // Scripts.
   "scripts/gate.mjs", "scripts/ci-gs4-lint.mjs", "scripts/record-fixtures.mjs", "scripts/ci-install.mjs",
+  // ADR-0025: maintained Pi build, local-host validation and operator history.
+  "scripts/build-pi.mjs", "scripts/test-pi-installed.mjs", "docs/migration/pi-v2.md",
+  "docs/current-state.md", "docs/decisions.md", "docs/session-log.md", "docs/pitfalls.md",
   // v2 user docs outside docs/architecture and docs/install (cleanup-plan §2).
   "docs/how-it-works.md", "docs/tools.md", "docs/algorithms.md", "docs/performance.md", "docs/UPSTREAM-CREDITS.md",
   // Root files.

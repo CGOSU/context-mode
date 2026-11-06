@@ -2,6 +2,10 @@
 
 **A free, local plugin for 10 coding agents. It keeps tool output out of your agent's context window and keeps all usage data on your machine. The plugin is free forever.**
 
+> **CGOSU Pi 定制版：** 默认主线 `main` 基于上游 2.1.4，Pi 构建版本为 `2.1.4-pi.1`。
+> 在本地克隆目录运行 `npm install` 和 `npm run build:pi`，然后让 Pi 使用生成的 `release-out` 目录的绝对路径，并只保留一个 `context-mode` 包来源。Git 源码包需先构建；官方 npm 包不含这里的 Pi 定制。
+> [Pi 定制与维护说明](docs/architecture/adr/0025-pi-customization.md)。下面保留上游项目文档。
+
 [![npm downloads](https://img.shields.io/npm/dt/context-mode?label=npm%20downloads)](https://www.npmjs.com/package/context-mode) [![GitHub stars](https://img.shields.io/github/stars/mksglu/context-mode?style=flat&color=yellow)](https://github.com/mksglu/context-mode) [![Discord](https://img.shields.io/discord/1478479412700909750?label=Discord&logo=discord&color=5865f2)](https://discord.gg/DCN9jUgN5v) [![License: ELv2](https://img.shields.io/badge/License-ELv2-blue.svg)](LICENSE)
 
 **33K GitHub stars · 683K npm downloads** (read 2026-11-01, [stats.json](stats.json)) · on the Hacker News front page and GitHub Trending: [charts and sources](#adoption-stars-and-npm-downloads)
