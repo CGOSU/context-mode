@@ -21,7 +21,13 @@ try {
   const pack = sh("npm", ["pack", "--json", "--pack-destination", tmp], dir);
   if (pack.status !== 0) { bad.push(`npm pack failed: ${pack.stderr.trim()}`); }
   else {
-    const info = JSON.parse(pack.stdout)[0];
+    // npm 11 emits an array; npm 12 keys the same entries by package name.
+    const packed = JSON.parse(pack.stdout);
+    const entries = Array.isArray(packed) ? packed : Object.values(packed ?? {});
+    const info = entries[0];
+    if (entries.length !== 1 || !Array.isArray(info?.files) || typeof info.filename !== "string") {
+      throw new Error("npm pack returned no single package file manifest");
+    }
     const want = [...sums.keys(), "SHA256SUMS"].sort();
     const got = info.files.map((f) => f.path).sort();
     for (const f of want) if (!got.includes(f)) bad.push(`missing from tarball: ${f}`);

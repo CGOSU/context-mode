@@ -125,6 +125,10 @@ describe("PRD-v2 section 9: ctx_execute", { concurrency: CONC }, () => {
       const b = await ctxExecute.handler({ language: "shell", code: "# snap\nprintf 'N1_SNAPSHOT phase=B\\n'", intent: "N1_SNAPSHOT" }, ctx);
       assert.ok(b.text.includes("phase=B"), b.text);
       assert.ok(!b.text.includes("phase=A"), b.text);
+      assert.notEqual(a.details.source, b.details.source, "each call exposes its exact stored source");
+      const previous = await ctxSearch.handler({ queries: ["N1_SNAPSHOT"], source: a.details.source }, ctx);
+      assert.ok(previous.text.includes("phase=A"), previous.text);
+      assert.ok(!previous.text.includes("phase=B"), previous.text);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -139,6 +143,21 @@ describe("PRD-v2 section 9: ctx_execute", { concurrency: CONC }, () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("ctx_execute retrieval cannot be shadowed by a user label matching its short handle", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cm-ex-source-shadow-"));
+    try {
+      const ctx = ctxFor(root);
+      const { ctxIndex } = await import("../src/core/tools/index.ts");
+      await ctxIndex.handler({ source: "s2", content: "UNRELATED_SHADOW_MARKER" }, ctx);
+      const out = await ctxExecute.handler({ language: "shell", code: "echo EXECUTION_ONLY_MARKER", intent: "EXECUTION_ONLY_MARKER" }, ctx);
+      assert.equal(out.details.sourceId, 2);
+      assert.ok(out.details.source.startsWith("ctx_execute:"));
+      const found = await ctxSearch.handler({ queries: [""], source: out.details.source }, ctx);
+      assert.ok(found.text.includes("EXECUTION_ONLY_MARKER"), found.text);
+      assert.ok(!found.text.includes("UNRELATED_SHADOW_MARKER"), found.text);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   // D-EXEC-BARE-1: exit 0 with the whole output in the reply carries nothing the head line adds.
@@ -232,6 +251,21 @@ describe("PRD-v2 section 9: ctx_execute", { concurrency: CONC }, () => {
     }
   });
 
+  test("ctx_execute reports storage failure without inventing a searchable source", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cm-evidence-fail-"));
+    try {
+      const ctx = ctxFor(root);
+      mkdirSync(dirname(ctx.project.projectDir), { recursive: true });
+      writeFileSync(ctx.project.projectDir, "not a directory");
+      const out = await ctxExecute.handler({ language: "javascript", code: "console.log('UNSTORED_EVIDENCE');", intent: "UNSTORED_EVIDENCE" }, ctx);
+      assert.equal(out.isError, true);
+      assert.equal(out.details.outputStored, false);
+      assert.equal(out.details.source, undefined);
+      assert.ok(out.text.includes("Output not indexed; preview only"), out.text);
+      assert.ok(out.text.includes("UNSTORED_EVIDENCE"), out.text);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("ctx_execute background:true returns 'started in background, pid <n>' with isError:false", async () => {
     if (process.platform === "win32") return;
     const root = mkdtempSync(join(tmpdir(), "cm-ex6-"));
@@ -239,6 +273,8 @@ describe("PRD-v2 section 9: ctx_execute", { concurrency: CONC }, () => {
       const out = await ctxExecute.handler({ language: "shell", code: "sleep 1", background: true }, ctxFor(root));
       assert.equal(out.isError, false);
       assert.ok(/^started in background, pid \d+$/.test(out.text));
+      assert.equal(out.details.status, "backgrounded");
+      assert.equal(out.details.running, true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -290,7 +326,7 @@ describe("PRD-v2 section 9: ctx_execute", { concurrency: CONC }, () => {
     return fn();
   }
 
-  test("[M2] GP4/exit1-stderr-is-error: exit 1 with stderr is isError; grep no-match exit 1 is not", async () => {
+  test("every nonzero exit remains a failure, including exit 1 with empty stderr", async () => {
     if (process.platform === "win32") return;
     const root = tmpRoot("e1");
     try {
@@ -301,8 +337,12 @@ describe("PRD-v2 section 9: ctx_execute", { concurrency: CONC }, () => {
       const js = await ctxExecute.handler({ language: "javascript", code: "console.error('jsboom'); process.exit(1)" }, ctxFor(root));
       assert.equal(js.isError, true);
       const grep = await ctxExecute.handler({ language: "shell", code: "printf 'a\\n' | grep zzz" }, ctxFor(root));
-      assert.equal(grep.isError, false);
+      assert.equal(grep.isError, true);
       assert.ok(grep.text.startsWith("exit 1"));
+      const silent = await ctxExecute.handler({ language: "shell", code: "printf 'test suite failed'; exit 1" }, ctxFor(root));
+      assert.equal(silent.isError, true);
+      assert.equal(silent.details.status, "failed");
+      assert.equal(silent.details.exitCode, 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -327,6 +367,32 @@ describe("PRD-v2 section 9: ctx_execute", { concurrency: CONC }, () => {
   });
 
   for (const how of ["cancel", "timeout"]) {
+    test(`ctx_execute ${how} retains partial output and exposes a searchable source`, async () => {
+      if (process.platform === "win32") return;
+      const root = tmpRoot("partial-" + how);
+      const ac = new AbortController();
+      try {
+        const ready = join(root, "ready");
+        const ctx = { ...ctxFor(root), signal: ac.signal };
+        const output = "PARTIAL_FIRST_MARKER\n" + "captured evidence row\n".repeat(5000) + "PARTIAL_LAST_MARKER\n";
+        const code = `process.stdout.write(${JSON.stringify(output)}, () => require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready')); setInterval(() => {}, 1000);`;
+        const pending = ctxExecute.handler({ language: "javascript", code, ...(how === "timeout" ? { timeoutMs: 1000 } : {}) }, ctx);
+        assert.ok(await waitFor(() => existsSync(ready), 5000));
+        if (how === "cancel") ac.abort();
+        const out = await pending;
+        assert.equal(out.isError, true);
+        assert.equal(out.details.status, how === "cancel" ? "cancelled" : "timed_out");
+        assert.equal(out.details.outputStored, true);
+        assert.equal(out.sandboxBytes, Buffer.byteLength(output));
+        assert.ok(out.text.includes('source:' + JSON.stringify(out.details.source)), out.text);
+        assert.ok(Buffer.byteLength(out.text) <= C.EXEC_PREVIEW_BYTES);
+        for (const marker of ["PARTIAL_FIRST_MARKER", "PARTIAL_LAST_MARKER"]) {
+          const found = await ctxSearch.handler({ queries: [marker], source: out.details.source }, ctxFor(root));
+          assert.ok(found.text.includes(marker), found.text);
+        }
+      } finally { ac.abort(); rmSync(root, { recursive: true, force: true }); }
+    });
+
     test(`[M2] GP4/hung-execute-cancel-kills-tree (${how}): tree dead and error reply within 2 s`, async () => {
       if (process.platform === "win32") return;
       const root = tmpRoot("hung");
@@ -466,6 +532,20 @@ describe("PRD-v2 section 9: ctx_batch", { concurrency: CONC }, () => {
     }
   });
 
+  test("ctx_batch sources remain separate across sessions in the same worktree", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cm-batch-session-source-"));
+    try {
+      const ctx = ctxFor(root);
+      const a = await ctxBatch.handler({ commands: ["echo BATCH_SESSION_A"], queries: ["BATCH_SESSION_A"] }, ctx);
+      const other = { ...ctx, sessionId: "other-session" };
+      const b = await ctxBatch.handler({ commands: ["echo BATCH_SESSION_B"], queries: ["BATCH_SESSION_B"] }, other);
+      assert.notEqual(a.details.source, b.details.source);
+      const old = await ctxSearch.handler({ queries: ["BATCH_SESSION"], source: a.details.source }, other);
+      assert.ok(old.text.includes("BATCH_SESSION_A"), old.text);
+      assert.ok(!old.text.includes("BATCH_SESSION_B"), old.text);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("ctx_batch is not readOnly (it runs commands)", () => {
     assert.equal(ctxBatch.name, "ctx_batch");
     assert.equal(ctxBatch.readOnly, false);
@@ -513,12 +593,14 @@ describe("PRD-v2 section 9: ctx_batch", { concurrency: CONC }, () => {
     }
   });
 
-  test("ctxBatch reply carries no counts line (D-BATCH-FRAMING-1); a failing last command adds its exit code", async () => {
+  test("ctxBatch reports a failing command before its result preview", async () => {
     const root = mkdtempSync(join(tmpdir(), "cm-ba5-"));
     try {
       const out = await ctxBatch.handler({ commands: ["echo a", "echo b; exit 2"], queries: ["a"] }, ctxFor(root));
-      assert.equal(out.text.includes("command(s)"), false);
-      assert.ok(out.text.startsWith("exit 2\n## a\n"));
+      assert.equal(out.isError, true);
+      assert.ok(out.text.startsWith("Batch failed:"), out.text);
+      assert.ok(out.text.includes("#2 failed (exit 2)"), out.text);
+      assert.ok(out.text.indexOf('source:') < out.text.indexOf('## a'));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -547,11 +629,13 @@ describe("PRD-v2 section 9: ctx_batch", { concurrency: CONC }, () => {
       const start = Date.now();
       const out = await runBatch({ commands: ["echo before-xyz", "sleep " + CHILD_SLEEP_S, "echo after-xyz; echo ran > '" + marker.split("\\").join("/") + "'"], queries: ["before-xyz", "after-xyz"] }, ctxFor(root), 800, C.RETENTION_SIZE_CAP_BYTES);
       assert.ok(Date.now() - start < CHILD_SLEEP_S * 1000);
-      assert.equal(out.isError, false);
+      assert.equal(out.isError, true);
       assert.ok(out.text.includes("Timed out after 800 ms"));
       assert.ok(out.text.includes("before-xyz"));
       assert.equal(out.text.includes("\nafter-xyz"), false);
       assert.equal(existsSync(marker), false);
+      assert.equal(out.details.status, "timed_out");
+      assert.deepEqual(out.details.commandResults.map((r) => r.status), ["completed", "timed_out", "skipped"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -562,13 +646,49 @@ describe("PRD-v2 section 9: ctx_batch", { concurrency: CONC }, () => {
     try {
       const out = await ctxBatch.handler({ commands: ["for i in $(seq 1 3000); do echo \"row $i needle\"; echo; done"], queries: ["needle", "row"] }, ctxFor(root));
       assert.ok(Buffer.byteLength(out.text) <= 16384);
-      assert.ok(out.text.startsWith("## needle\n")); // D-BATCH-FRAMING-1: no counts line, exit 0 is not printed
-      assert.ok(out.text.trimEnd().endsWith('source:"ctx_batch:1:1"})'));
+      assert.ok(out.text.startsWith('more: ctx_search({queries:[...], source:' + JSON.stringify(out.details.source) + '})\n'));
+      assert.ok(out.text.includes("## needle\n"));
       assert.ok(out.sandboxBytes > 16384);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  for (const how of ["cancel", "timeout"]) {
+    test(`ctx_batch ${how} indexes captured output across all write groups and marks skipped commands`, async () => {
+      if (process.platform === "win32") return;
+      const root = mkdtempSync(join(tmpdir(), "cm-batch-evidence-"));
+      const ac = new AbortController();
+      try {
+        const ready = join(root, "ready");
+        const never = join(root, "never");
+        const output = "BATCH_PARTIAL_FIRST\n" + "captured batch row\n".repeat(Math.ceil(C.INDEX_WRITE_CHUNK / 5)) + "BATCH_PARTIAL_LAST\n";
+        const code = `process.stdout.write(${JSON.stringify(output)}, () => require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready')); setInterval(() => {}, 1000);`;
+        // Write the program to avoid the platform's argv size limit.
+        const script = join(root, "producer.cjs");
+        writeFileSync(script, code);
+        const quote = (s) => "'" + s.replaceAll("'", "'\\''") + "'";
+        const ctx = { ...ctxFor(root), signal: ac.signal };
+        const pending = runBatch({ commands: [quote(process.execPath) + " " + quote(script), "echo ran > " + quote(never)], queries: ["BATCH_PARTIAL_LAST"] }, ctx, how === "timeout" ? 1200 : 60000, C.RETENTION_SIZE_CAP_BYTES);
+        const deadline = Date.now() + 5000;
+        while (!existsSync(ready) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.ok(existsSync(ready), "producer flushed its partial output");
+        if (how === "cancel") ac.abort();
+        const out = await pending;
+        assert.equal(out.isError, true);
+        assert.equal(out.details.status, how === "cancel" ? "cancelled" : "timed_out");
+        assert.equal(out.details.evidenceComplete, true);
+        assert.equal(out.sandboxBytes, Buffer.byteLength(output));
+        assert.deepEqual(out.details.commandResults.map((r) => r.status), [how === "cancel" ? "cancelled" : "timed_out", "skipped"]);
+        assert.equal(existsSync(never), false);
+        assert.ok(out.text.includes('source:' + JSON.stringify(out.details.source)), out.text);
+        for (const marker of ["BATCH_PARTIAL_FIRST", "BATCH_PARTIAL_LAST"]) {
+          const found = await ctxSearch.handler({ queries: [marker], source: out.details.source }, ctxFor(root));
+          assert.ok(found.text.includes(marker), found.text);
+        }
+      } finally { ac.abort(); rmSync(root, { recursive: true, force: true }); }
+    });
+  }
 
   // D-BATCH-FRAMING-1: the reply repeats nothing the model already holds (its own command and query counts)
   // and prints the `more:` pointer only when output was left out. A reply whose output is all shown is
@@ -600,17 +720,21 @@ describe("PRD-v2 section 9: ctx_batch", { concurrency: CONC }, () => {
     const root = mkdtempSync(join(tmpdir(), "cm-bf4-"));
     try {
       const out = await ctxBatch.handler({ commands: ["echo one-aaa", "echo two-" + "b".repeat(200)], queries: ["one-aaa"] }, ctxFor(root));
-      assert.equal(out.text, '## one-aaa\none-aaa\nmore: ctx_search({queries:[...], source:"ctx_batch:1:1"})');
+      assert.equal(out.text, 'more: ctx_search({queries:[...], source:' + JSON.stringify(out.details.source) + '})\n## one-aaa\none-aaa');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("ctx_batch (D-BATCH-FRAMING-1): the exit line appears only when the last command did not exit 0", async () => {
+  test("ctx_batch reports failure even if a later command succeeds", async () => {
     const root = mkdtempSync(join(tmpdir(), "cm-bf3-"));
     try {
-      const out = await ctxBatch.handler({ commands: ["echo fail-xyz; exit 3"], queries: ["fail-xyz"] }, ctxFor(root));
-      assert.equal(out.text, "exit 3\n## fail-xyz\nfail-xyz");
+      const out = await ctxBatch.handler({ commands: ["echo fail-xyz; exit 3", "echo later-success"], queries: ["fail-xyz"] }, ctxFor(root));
+      assert.equal(out.isError, true);
+      assert.ok(out.text.startsWith("Batch failed:"), out.text);
+      assert.ok(out.text.includes("#1 failed (exit 3)"), out.text);
+      assert.equal(out.details.exitCode, 3);
+      assert.deepEqual(out.details.commandResults.map((r) => r.status), ["failed", "completed"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -651,7 +775,7 @@ describe("PRD-v2 section 9: ctx_batch", { concurrency: CONC }, () => {
       const budget = 1048576; // the tool passes RETENTION_SIZE_CAP_BYTES; a small budget keeps the test fast
       const cmd = `node -e "for (let i = 0; i < 60000; i++) console.log('row ' + i + ' needle ' + 'x'.repeat(40))"`;
       const out = await runBatch({ commands: [cmd], queries: ["needle"] }, ctxFor(root), C.EXEC_TIMEOUT_MS, budget);
-      assert.equal(out.isError, false);
+      assert.equal(out.isError, true);
       assert.ok(out.sandboxBytes > budget);
       const line = out.text.split("\n").find((l) => l.startsWith("Indexed "));
       assert.ok(line, "reply states the cut");
@@ -676,7 +800,7 @@ describe("PRD-v2 section 9: ctx_batch", { concurrency: CONC }, () => {
       const out = await runBatch({ commands: ["echo first-xyz", flood, "echo never-xyz"], queries: ["first-xyz", "needle"] }, ctxFor(root), bound, C.RETENTION_SIZE_CAP_BYTES);
       const took = Date.now() - t0;
       assert.ok(took < bound + 1500, `took ${took} ms`);
-      assert.equal(out.isError, false);
+      assert.equal(out.isError, true);
       assert.ok(out.text.includes("Timed out after " + bound + " ms"));
       assert.ok(out.text.includes("first-xyz"));
       assert.equal(out.text.includes("\nnever-xyz"), false);

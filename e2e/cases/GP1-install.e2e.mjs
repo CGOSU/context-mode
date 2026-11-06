@@ -482,7 +482,7 @@ import { vscodeMcpFile } from "../harness/vscode-user-dir.mjs";
 {
   // GP1 — opencode clientInfo detect (14a-issue-cases.md GP1 `opencode-clientinfo-detect`, #1276;
   // ADR-0007 decision 4; DEVIATIONS D-M2-arch-1, D-M7-arch-1, D-M7-G1-1). Black box, no src/ import (GS4).
-  // Agent id comes from --agent; a clientInfo.name of "opencode" must resolve to adapter opencode.
+  // Agent id comes from --agent; clientInfo identifies the caller independently of the adapter.
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const SERVER_BUNDLE = path.join(path.resolve(__dirname, "..", ".."), "release-out", "server.mjs");
   const INIT = { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "opencode", version: "1.0.0" } };
@@ -536,7 +536,9 @@ import { vscodeMcpFile } from "../harness/vscode-user-dir.mjs";
     const text = reply?.content?.[0]?.text ?? "";
     const d3 = text.split("\n").find((l) => l.startsWith("| D3 ")) ?? "";
     assert.ok(d3.includes("opencode"), `D3 names the --agent adapter, not clientInfo: ${d3}`);
-    assert.ok(!text.includes("claude-code"), "no row names the clientInfo host");
+    assert.match(text.split("\n")[0], /agent opencode 9 \(client claude-code\)/, "environment distinguishes the adapter from the caller");
+    assert.ok(!text.split("\n").filter((line) => line.startsWith("|")).some((line) => line.includes("claude-code")),
+      "no diagnostic table row names the clientInfo host");
     assert.ok(text.split("\n").some((l) => l.startsWith("| D7 ") && l.includes("| PASS |")), "D7 resolves the project from the opencode spawn cwd");
   });
 }

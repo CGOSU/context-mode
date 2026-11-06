@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { vscodeMcpFile } from "../harness/vscode-user-dir.mjs";
+import { npmPackInfo } from "../harness/npm-pack.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
@@ -102,7 +103,7 @@ test("[M6] GP-SETUP/npm-pack-install-setup-twice-remove: the packed npm bin sets
   // D3 timing is gated once, by e2e/checks/setup-hook-overhead.mjs (DEVIATIONS D-CI-PERF-1). This functional case
   // lifts the product's timing knob so shared-runner jitter cannot fail setup or doctor; every other check still runs.
   env.CM_HOOK_OVERHEAD_BUDGET_MS = "60000";
-  const packed = JSON.parse(sh("npm", ["pack", "--json", "--pack-destination", packDir], { cwd: outDir, env, shell: WIN }))[0];
+  const packed = npmPackInfo(sh("npm", ["pack", "--json", "--pack-destination", packDir], { cwd: outDir, env, shell: WIN }));
 
   // D1: the tarball file list equals the release tree, and package.json is a SHA256SUMS row.
   const sums = new Map(readFileSync(path.join(outDir, "SHA256SUMS"), "utf8").trim().split("\n").map((l) => { const [h, ...r] = l.split("  "); return [r.join("  "), h]; }));

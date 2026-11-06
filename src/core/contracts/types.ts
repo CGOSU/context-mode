@@ -63,11 +63,11 @@ export interface ProjectContext {
 }
 export type ProjectSourceKind = "env:CLAUDE_PROJECT_DIR" | "arg:--agent+cwd" | "arg:workspaceFolder" | "spawn-cwd" | "pi:ctx.cwd";
 
-export interface ToolContext { project: ProjectContext; sessionId: string; turn: number; signal: AbortSignal; clientInfo?: { name: string; version: string }; protocolVersion: string; piCwd?: string; } // piCwd: Pi ctx.cwd (D-R38-PI-D7-1)
+export interface ToolContext { project: ProjectContext; sessionId: string; turn: number; signal: AbortSignal; clientInfo?: { name: string; version: string }; protocolVersion: string; piCwd?: string; outputBudgetBytes?: number; } // Pi applies its final character budget after selection.
 // DEVIATIONS D-M2-2: the handler supplies the journal facts only it knows; the server stays the one
 // write path and uses the D-M1-T10-1 defaults when `journal` is absent.
 export interface JournalFacts { kind: EventKind; key: string | null; path: string | null; exit_code: number | null; }
-export interface ToolReply { text: string; isError: boolean; sandboxBytes: number; journal?: JournalFacts; }
+export interface ToolReply { text: string; isError: boolean; sandboxBytes: number; journal?: JournalFacts; details?: Record<string, unknown>; }
 export interface ToolDef<I> { name: string; description: string; schema: import("zod").ZodType<I>; readOnly: boolean; alwaysLoad: boolean; handler(input: I, ctx: ToolContext): Promise<ToolReply>; }
 
 // ADR-0020: "package" = file inside the installed package dir; "home-file"/"home-dir" = path under HOME;

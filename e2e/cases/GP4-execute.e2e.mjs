@@ -51,14 +51,36 @@ async function callBatch(args, env) {
   return reply;
 }
 
+async function verifyIndexedOutput(reply, query, expected) {
+  const lines = (reply.content?.[0]?.text ?? "").split("\n");
+  const pointerIndex = lines.findIndex((line) => /^(?:more: )?ctx_search\(/.test(line));
+  assert.ok(pointerIndex >= 0 && pointerIndex <= 1, "the complete source pointer precedes the preview");
+  const match = lines[pointerIndex].match(/, source:("(?:\\.|[^"\\])*")\}\)$/);
+  assert.ok(match, "the pointer retains a complete JSON source value");
+  const source = JSON.parse(match[1]);
+  assert.match(source, /^ctx_(?:execute|batch):(?:\d+:\d+:)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?::|$)/);
+  const client = spawnBundle(SERVER_BUNDLE, ENV);
+  try {
+    await client.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "e2e", version: "0.0.0" } });
+    const found = await client.request("tools/call", { name: "ctx_search", arguments: { queries: [query], source } });
+    assert.equal(found.isError, false);
+    assert.ok((found.content?.[0]?.text ?? "").includes(expected), "the exact source retrieves the original evidence");
+  } finally { await client.close(); }
+}
+
 test("[M2] GP4/exit-class-grep-exit-1-not-error", async () => {
+  // Historical case id: nonzero exit now remains a failure, including grep's no-match exit 1.
   const reply = await callExecute({ language: "shell", code: "echo nope | grep yes" });
+  assert.equal(reply.isError, true);
+  assert.match(reply.content?.[0]?.text ?? "", /^exit 1 · 0 B/);
   golden("exit-class-grep-exit-1-not-error", reply);
 });
 
 test("[M2] GP4/output-cut-is-code-point-safe", async () => {
   const reply = await callExecute({ language: "javascript", code: "process.stdout.write('é'.repeat(20000))" });
   assert.ok(!JSON.stringify(reply).includes("\\ufffd"), "no replacement character from a mid-codepoint cut");
+  assert.ok((reply.content?.[0]?.text ?? "").isWellFormed());
+  await verifyIndexedOutput(reply, "", "é");
   golden("output-cut-is-code-point-safe", reply);
 });
 
@@ -171,7 +193,7 @@ test("[M2] GP4/exit1-stderr-is-error", async () => {
   const bad = await callExecute({ language: "shell", code: "echo boom >&2; exit 1" });
   assert.equal(bad.isError, true);
   const grep = await callExecute({ language: "shell", code: "printf 'a\\n' | grep zzz" });
-  assert.equal(grep.isError, false);
+  assert.equal(grep.isError, true);
   golden("exit1-stderr-is-error", { bad, grep });
 });
 
@@ -231,6 +253,7 @@ test("[M2] GP4/code-point-safe-truncation-cut", async () => {
   const text = reply.content?.[0]?.text ?? "";
   assert.ok(text.isWellFormed(), "no lone surrogate from a mid-codepoint cut");
   assert.equal(Buffer.from(text, "utf8").toString("utf8"), text);
+  await verifyIndexedOutput(reply, "", EMOJI);
   golden("code-point-safe-truncation-cut", reply);
 });
 
@@ -240,6 +263,7 @@ test("[M2] GP4/surrogate-safe-truncation", async () => {
   assert.equal(reply.isError, false);
   assert.ok(text.isWellFormed());
   assert.equal(Buffer.from(text, "utf8").toString("utf8"), text);
+  await verifyIndexedOutput(reply, "r3999", "r3999");
   golden("surrogate-safe-truncation", reply);
 });
 
@@ -310,6 +334,7 @@ test("[M2] GP4/batch-timeout-bounds-whole-handler", async () => {
   const tookMs = Date.now() - t0;
   assert.ok(tookMs < 15000, `whole batch handler took ${tookMs}ms`);
   assert.equal(reply.isError, false);
+  await verifyIndexedOutput(reply, "second-xyz", "second-xyz");
   golden("batch-timeout-bounds-whole-handler", reply);
 });
 

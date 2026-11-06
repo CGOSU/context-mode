@@ -1,11 +1,13 @@
 # No lossy cut (owner main rule, D-NO-LOSSY-CUT-1 / D-NO-LOSSY-CUT-2)
 
-Rule: a reply may be bounded only when the full content is stored first (indexed) and the reply tells the agent how to get the rest.
-A cut that drops content with no way back is forbidden.
+Rule: a successful reply may be bounded only when the full content is stored first (indexed) and the reply tells the agent how to get the rest.
+Silent content loss is forbidden. If persistence fails, the tool returns an explicit error and a bounded raw preview;
+the omitted output may be unrecoverable, so this failure path must never claim to be lossless or advertise a searchable source.
 
-`tests/repo/no-truncate.test.mjs` reads this file. Every `capBytes(` call in `src/` must have one `capBytes` row below
-(same file, same count) with verdict `lossless`. `capBytes` is only a final guard. `tests/tools/no-lossy-cut.test.mjs`
-proves it cuts nothing real: the budget math keeps head, chunks and pointer under OUTPUT_CAP, and an echo of caller input
+`tests/0014-repo-hygiene.test.mjs` reads this file. Every `capBytes(` call in `src/` must have one `capBytes` row below
+(same file, same count). The normal verdict is `lossless`; the audited execution/batch failure paths below are explicit exceptions.
+`tests/prd9-sandbox.test.mjs` checks stored-output retrieval, stopped execution, storage failure and the batch ingest limit.
+In the normal path, the budget math keeps head, chunks and pointer under the output cap, and an echo of caller input
 (intent, query, label) longer than ECHO_MAX_BYTES is named by position, `...` or source handle instead of echoed.
 
 ## capBytes call sites
@@ -13,12 +15,17 @@ proves it cuts nothing real: the budget math keeps head, chunks and pointer unde
 | Site | Kind | Full content stored and reachable | Verdict |
 |---|---|---|---|
 | src/core/tools/search.ts:43 | capBytes final guard | Search reads the index. Whole chunks only, paging line names the next call. Oversize query is not echoed in the reply. | lossless |
-| src/core/tools/execute.ts:161 | capBytes final guard | Output is indexed first; reply = head + whole chunks + `ctx_search(...)` pointer. Pointer cannot exceed cap (a long intent shows as `...`). | lossless |
-| src/core/tools/stats.ts:93 | capBytes final guard | Fixed-size table; size is bounded by the agent count, far under OUTPUT_CAP (test). Nothing is dropped. | lossless |
-| src/core/tools/batch.ts:266 | capBytes final guard | Every command output is indexed; each query gets a share of whole chunks; footer pointer fixed. A long query is named `query N`. | lossless |
-| src/core/tools/index.ts:146 | capBytes final guard | One-line reply. Content is stored whole; a label over ECHO_MAX_BYTES is shown as its handle `sN`. | lossless |
+| src/core/tools/execute.ts:174 | capBytes final guard | Captured output, including timeout/cancel partial output, is indexed first under a unique call label. Status and the exact-source search pointer precede whole selected chunks. | lossless |
+| src/core/tools/execute.ts:184 | capBytes storage-failure fallback | Persistence failed. The reply retains the execution outcome and says `Output not indexed; preview only`, returns `isError:true` and `outputStored:false`, and supplies no source. Raw output beyond the preview may be lost. | explicit failure |
+| src/core/tools/stats.ts:503 | capBytes final guard | Fixed-size table; size is bounded by the agent count, far under OUTPUT_CAP (test). Nothing is dropped. | lossless |
+| src/core/tools/batch.ts:310 | capBytes indexed-result guard | Within the ingest limit, all captured command output is indexed even after timeout/cancel; status and source precede selected chunks. If the byte limit stops ingestion, only the indexed portion is reachable: the reply reports stored/total bytes, returns `isError:true` and `evidenceComplete:false`. The unstored remainder may be lost. | conditional |
+| src/core/tools/batch.ts:322 | capBytes storage-failure fallback | An indexing/storage error returns the command outcomes and `Output not indexed; preview only`, with `isError:true`, `outputStored:false` and no source claim. The bounded raw preview does not make omitted output recoverable. | explicit failure |
+| src/core/tools/index.ts:174 | capBytes final guard | One-line reply. Content is stored whole; a label over ECHO_MAX_BYTES is shown as its handle `sN`. | lossless |
 | src/core/tools/run-wrapper.ts:147 | capBytes final guard | run.mjs output is indexed first; pointer `more: node search.mjs <id> "<terms>"` (terms shown whole; shell budget reserves it). | lossless |
 | src/core/tools/run-wrapper.ts:169 | capBytes final guard | search.mjs returns whole chunks of one stored source with the budget OUTPUT_CAP. | lossless |
+
+The batch byte cap is a storage bound, not a claim that arbitrary output can always be retained. It remains enforced after cancellation;
+the caller is told when evidence is incomplete. A host may still bound the returned error preview, but must preserve its failure and source metadata.
 
 ## Other places that shorten content
 

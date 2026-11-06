@@ -39,8 +39,8 @@ function bytes(s: string): number {
   return Buffer.byteLength(s, "utf8");
 }
 
-function reply(text: string, isError: boolean): ToolReply {
-  return { text: capBytes(text, OUTPUT_CAP).text, isError, sandboxBytes: 0 };
+function reply(text: string, isError: boolean, outputBudgetBytes = OUTPUT_CAP): ToolReply {
+  return { text: capBytes(text, outputBudgetBytes).text, isError, sandboxBytes: 0 };
 }
 
 function invalid(field: string, action: string): ToolReply {
@@ -82,7 +82,7 @@ function named(given: string | undefined, pick: SourcePick | null): Named {
 
 // D-LABEL-HANDLE-2: empty `queries` on one stored source -> its card: handle, label size, chunks, bytes, then the
 // stored label whole, LABEL_PAGE_BYTES a page; `offset` is the label byte offset of the page.
-function sourceCard(db: DbHandle, id: number, input: CtxSearchInput, scope: SearchScope, arg: string): ToolReply | null {
+function sourceCard(db: DbHandle, id: number, input: CtxSearchInput, scope: SearchScope, arg: string, outputBudgetBytes?: number): ToolReply | null {
   const row = sourceCardRow(db, id);
   if (row === null) return null;
   const pg = labelPage(row.label, input.offset ?? 0, LABEL_PAGE_BYTES);
@@ -92,7 +92,7 @@ function sourceCard(db: DbHandle, id: number, input: CtxSearchInput, scope: Sear
     pg.text,
   ];
   if (pg.next !== null) lines.push("More: " + callText([], scope, arg, "offset:" + pg.next));
-  return reply(lines.join("\n"), false);
+  return reply(lines.join("\n"), false, outputBudgetBytes);
 }
 
 // The call a paging line repeats: same queries, scope and source, plus the cursor ("" = the call as is).
@@ -170,7 +170,7 @@ function jsonRowsReply(db: DbHandle, input: CtxSearchInput, scope: SearchScope, 
     }
   }
   if (shown === 0 && !more) return null;
-  return reply((nm.note === null ? out : [nm.note, ...out]).join("\n"), false);
+  return reply((nm.note === null ? out : [nm.note, ...out]).join("\n"), false, ctx.outputBudgetBytes);
 }
 
 // D-SEARCH-SMALL-1: the hit bytes of one reply, per source, stay within this share of that source's bytes. A reply
@@ -287,7 +287,7 @@ function relevance(db: DbHandle, given: CtxSearchInput, scope: SearchScope, ctx:
       }
       // D-LABEL-HANDLE-2: a long label is its handle and a short preview, so the snippet keeps the room.
       const line = shownLabel(hit.label, hit.sourceId) + " #" + hit.ord + ": " + hit.snippet;
-      if (used + bytes(line) + 1 + reserve > OUTPUT_CAP) {
+      if (used + bytes(line) + 1 + reserve > (ctx.outputBudgetBytes ?? OUTPUT_CAP)) {
         cut = offset + count(hits, i);
         stopped = true;
         break;
@@ -316,7 +316,7 @@ function relevance(db: DbHandle, given: CtxSearchInput, scope: SearchScope, ctx:
   const byPos = new Map<number, string[]>();
   for (const m of more) byPos.set(m.pos, [...(byPos.get(m.pos) ?? []), m.q]);
   for (const [pos, qs] of byPos) moreLines.push("More: " + callText(qs, scope, nm.arg, "offset:" + pos));
-  return reply(lines.concat(moreLines).join("\n"), false);
+  return reply(lines.concat(moreLines).join("\n"), false, ctx.outputBudgetBytes);
 }
 
 // ADR-0009 §8.1 rule 8 line; `#<seq>` only for journal rows (D-M2-T9-2).
@@ -353,7 +353,7 @@ function timeline(db: DbHandle, input: CtxSearchInput, scope: SearchScope, ctx: 
       groupBytes += bytes(line) + 1;
       i += 1;
     }
-    if (lastTs !== null && used + groupBytes + reserve > OUTPUT_CAP) {
+    if (lastTs !== null && used + groupBytes + reserve > (ctx.outputBudgetBytes ?? OUTPUT_CAP)) {
       more = true;
       break;
     }
@@ -362,13 +362,13 @@ function timeline(db: DbHandle, input: CtxSearchInput, scope: SearchScope, ctx: 
     lastTs = ts;
   }
   if (more && lastTs !== null) lines.push(moreLine(lastTs));
-  return reply(lines.join("\n"), false);
+  return reply(lines.join("\n"), false, ctx.outputBudgetBytes);
 }
 
 function answer(db: DbHandle, input: CtxSearchInput, scope: SearchScope, ctx: ToolContext, nm: Named, ms: MemorySide, indexed: boolean, sort: string, pick: SourcePick | null): ToolReply {
   if (sort === "timeline") return timeline(db, input, scope, ctx, nm, ms);
   if (pick !== null && pick.id !== null && input.queries.length === 0) {
-    const card = sourceCard(db, pick.id, input, scope, nm.arg as string);
+    const card = sourceCard(db, pick.id, input, scope, nm.arg as string, ctx.outputBudgetBytes);
     if (card !== null) return card;
   }
   const rows = ms.named ? null : jsonRowsReply(db, input, scope, ctx, nm);
@@ -405,7 +405,7 @@ async function handler(input: CtxSearchInput, ctx: ToolContext): Promise<ToolRep
     if (file === null || scope !== "session") return out;
     // D-MEMORY-SOURCE-1: scope "session" holds no memory file; one line names the scope that holds it.
     const call = callText(input.queries, "worktree", nm.arg, sort === "timeline" ? 'sort:"timeline"' : "");
-    return reply(out.text + "\nMemory file " + file.label + ' is in scope "worktree": ' + call + " searches it.", out.isError);
+    return reply(out.text + "\nMemory file " + file.label + ' is in scope "worktree": ' + call + " searches it.", out.isError, ctx.outputBudgetBytes);
   } finally {
     closeDb(db);
   }

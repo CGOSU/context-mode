@@ -411,8 +411,10 @@ describe("ADR-0019 host config (concurrent blocks)", { concurrency: CONC }, () =
     // python3 tomllib is a second, unrelated TOML 1.0 parser; used when the machine has one.
     function pythonParses(text) {
       for (const bin of ["python3", "python"]) {
-        const r = spawnSync(bin, ["-c", "import sys,tomllib;tomllib.loads(sys.stdin.buffer.read().decode('utf-8-sig'))"], { input: text, encoding: "utf8", windowsHide: true });
-        if (r.error) continue;
+        // Python before 3.11 may exist without the optional oracle. A parse error must still fail.
+        const script = "import sys\ntry:\n import tomllib\nexcept ImportError:\n sys.exit(77)\ntomllib.loads(sys.stdin.buffer.read().decode('utf-8-sig'))";
+        const r = spawnSync(bin, ["-c", script], { input: text, encoding: "utf8", windowsHide: true });
+        if (r.error || r.status === 77) continue;
         return r.status === 0;
       }
       return undefined;

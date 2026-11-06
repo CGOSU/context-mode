@@ -4,6 +4,7 @@
 // what it prints. Output that does not fit OUTPUT_CAP is indexed in full and reduced by whole-chunk
 // selection; nothing is cut and no byte is lost.
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
 import { z } from "zod/v4";
@@ -53,8 +54,6 @@ const PS_PRELUDE = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8";
 const PS_ARGS: readonly string[] = Object.freeze(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]);
 // GP4/deleted-cwd-no-ansi (#1286): plain output even when the parent sets FORCE_COLOR (D-M2-T10-4).
 const PLAIN_OUTPUT_ENV: Readonly<Record<string, string>> = Object.freeze({ NO_COLOR: "1", FORCE_COLOR: "0" });
-// Q8 (v1 grep rule): a shell exit 1 with empty stderr is "no match", not an error (D-M2-T10-1).
-const SOFT_EXIT = 1;
 
 // Step 9 (D-M2-T10-2): the background launcher runs through runProcess like any other call. "start"
 // starts itself again detached in "run" mode, prints that pid and exits; "run" leads the new process
@@ -118,16 +117,12 @@ function echoBlock(language: string, code: string): string {
   return "```" + language + "\n" + code + "\n```";
 }
 
-// Step 15: "ctx_execute:" + the code's first line, at most SOURCE_LABEL_MAX_CHARS code points.
+// Search resolves handles through labels; include a call id so repeated commands
+// never make a source pointer retrieve another execution's evidence.
 function sourceLabel(code: string): string {
   const nl = code.indexOf("\n");
   const first = nl < 0 ? code : code.slice(0, nl);
-  return Array.from(TOOL + ":" + first).slice(0, SOURCE_LABEL_MAX_CHARS).join("");
-}
-
-// Same text as select.ts moreLine; reserved in the budget so the reply always ends with it (D-M2-6).
-function moreReserve(intent: string, label: string): number {
-  return Buffer.byteLength(moreLine(intent, label), "utf8");
+  return Array.from(TOOL + ":" + randomUUID() + ":" + first).slice(0, SOURCE_LABEL_MAX_CHARS).join("");
 }
 
 function spawnFailed(argv0: string, cwd: string): string {
@@ -135,36 +130,63 @@ function spawnFailed(argv0: string, cwd: string): string {
 }
 
 // Steps 12-17.
-async function finish(input: ExecuteInput, ctx: ToolContext, r: RunResult, exitCode: number, journal: JournalFacts): Promise<ToolReply> {
-  const isError = exitCode !== 0 && !(input.language === "shell" && exitCode === SOFT_EXIT && r.stderr.length === 0);
-  const combined = r.stdout.toString("utf8") + (exitCode !== 0 ? r.stderr.toString("utf8") : "");
+async function finish(input: ExecuteInput, ctx: ToolContext, r: RunResult, journal: JournalFacts, stopped?: string): Promise<ToolReply> {
+  const exitCode = r.exitCode;
+  const status = r.killed === "timeout" ? "timed_out" : r.killed === "cancel" ? "cancelled" : exitCode === 0 ? "completed" : "failed";
+  // An empty stderr does not turn a failing test/build/command into success.
+  const isError = stopped !== undefined || exitCode !== 0;
+  const combined = r.stdout.toString("utf8") + (isError ? r.stderr.toString("utf8") : "");
   const fullBytes = Buffer.byteLength(combined, "utf8");
-  const head = summaryLine(exitCode, fullBytes);
+  const details = { status, exitCode, outputBytes: fullBytes };
+  const head = stopped ?? summaryLine(exitCode as number, fullBytes);
   const intent = input.intent ?? "";
+  const outputCap = ctx.outputBudgetBytes ?? OUTPUT_CAP;
   // Step 14: the whole reply, summary and echo included, fits; nothing to index (D-M2-T10-6).
   // D-EXEC-BARE-1: exit 0 and the whole output in the reply, no echo: the head line says nothing the
   // reply does not already hold, so the reply is the output. Empty output keeps the head.
-  const bare = exitCode === 0 && input.summary !== true && combined !== "";
+  const bare = !isError && input.summary !== true && combined !== "";
   const direct = (bare ? "" : head + "\n") + (input.summary === true ? echoBlock(input.language, input.code) + "\n" : "") + combined;
-  const fits = Buffer.byteLength(head + "\n" + (input.summary === true ? echoBlock(input.language, input.code) + "\n" : "") + combined, "utf8") <= OUTPUT_CAP;
-  if (intent === "" && fits) {
-    return { text: direct, isError, sandboxBytes: fullBytes, journal };
+  const fits = Buffer.byteLength(head + "\n" + (input.summary === true ? echoBlock(input.language, input.code) + "\n" : "") + combined, "utf8") <= outputCap;
+  if (stopped !== undefined && fullBytes === 0) {
+    return { text: head, isError: true, sandboxBytes: 0, journal, details };
+  }
+  if (stopped === undefined && intent === "" && fits) {
+    return { text: direct, isError, sandboxBytes: fullBytes, journal, details };
   }
   // Steps 15-17: index the full output, then select whole chunks within what is left of the cap.
   // D-EXEC-PREVIEW-1: output that does not fit OUTPUT_CAP gets a preview of EXEC_PREVIEW_BYTES; a small
   // output with an intent keeps the whole OUTPUT_CAP budget.
   const label = sourceLabel(input.code);
-  const budget = (fits ? OUTPUT_CAP : EXEC_PREVIEW_BYTES) - Buffer.byteLength(head, "utf8") - 2 - moreReserve(intent, label);
-  const db = await openDb(ctx.project);
-  let picked: { text: string; more: string | null };
+  const limit = fits ? outputCap : ctx.outputBudgetBytes ?? EXEC_PREVIEW_BYTES;
+  let db: Awaited<ReturnType<typeof openDb>> | undefined;
   try {
+    // Stopping the child ends execution, not evidence capture: even short partial
+    // output is indexed so cancellation/timeout never silently discards it.
+    db = await openDb(ctx.project);
     const { sourceId } = indexText(db, ctx.project, ctx.sessionId, label, combined, "text");
-    picked = selectChunks(db, sourceId, intent, budget);
+    // Exact UUID labels cannot be shadowed by an unrelated user label such as
+    // "s2" (search intentionally gives labels priority over short handles).
+    const source = label;
+    const pointer = moreLine(intent, source);
+    const prefix = head + "\n" + pointer + "\n";
+    const picked = selectChunks(db, sourceId, intent, Math.max(0, limit - Buffer.byteLength(prefix, "utf8")));
+    return {
+      text: capBytes(prefix + picked.text, limit).text,
+      isError, sandboxBytes: fullBytes, journal,
+      details: { ...details, source, sourceId, outputStored: true },
+    };
+  } catch (err) {
+    const reason = err instanceof CtxError ? err.toLine() : err instanceof Error ? err.message : "storage unavailable";
+    // No searchable-source claim when persistence failed. Keep the execution
+    // outcome and as much raw output as fits, with the loss visible to callers.
+    const prefix = head + "\nOutput not indexed; preview only: " + reason + "\n";
+    return {
+      text: capBytes(prefix + combined, limit).text, isError: true,
+      sandboxBytes: fullBytes, journal, details: { ...details, outputStored: false, indexingFailed: true },
+    };
   } finally {
-    closeDb(db);
+    if (db !== undefined) closeDb(db);
   }
-  const text = head + "\n" + picked.text + (picked.more === null ? "" : "\n" + picked.more);
-  return { text: capBytes(text, OUTPUT_CAP).text, isError, sandboxBytes: fullBytes, journal };
 }
 
 async function handler(raw: ExecuteInput, ctx: ToolContext): Promise<ToolReply> {
@@ -208,16 +230,17 @@ async function handler(raw: ExecuteInput, ctx: ToolContext): Promise<ToolReply> 
       const pid = r.stdout.toString("utf8");
       if (r.exitCode !== 0 || pid === "" || !Number.isSafeInteger(Number(pid))) return fail(spawnFailed(argv[0], cwd), journal);
       handedOff = true;
-      return { text: BACKGROUND_REPLY_PREFIX + pid, isError: false, sandboxBytes: 0, journal };
+      return { text: BACKGROUND_REPLY_PREFIX + pid, isError: false, sandboxBytes: 0, journal,
+        details: { status: "backgrounded", exitCode: null, pid: Number(pid), running: true } };
     }
     // Steps 8, 10, 11.
     const r = await runProcess(argv, { cwd, env, signal: ctx.signal, timeoutMs });
-    if (r.killed === "timeout") return fail(new CtxError("TIMEOUT", { ms: timeoutMs }).toLine(), journal);
-    if (r.killed === "cancel") return fail(CANCELLED_LINE, journal);
+    if (r.killed === "timeout") return await finish(input, ctx, r, journal, new CtxError("TIMEOUT", { ms: timeoutMs }).toLine());
+    if (r.killed === "cancel") return await finish(input, ctx, r, journal, CANCELLED_LINE);
     // D-M2-T10-4: no exit code = the process did not start (deleted cwd, runtime gone) or died by an
     // outside signal. One line, no fallback directory.
-    if (r.exitCode === null) return fail(spawnFailed(argv[0], cwd), journal);
-    return await finish(input, ctx, r, r.exitCode, { ...journal, exit_code: r.exitCode });
+    if (r.exitCode === null) return await finish(input, ctx, r, journal, spawnFailed(argv[0], cwd));
+    return await finish(input, ctx, r, { ...journal, exit_code: r.exitCode });
   } catch (err) {
     // Step 18: one line, never a stack.
     if (err instanceof CtxError) return fail(err.toLine(), journal);

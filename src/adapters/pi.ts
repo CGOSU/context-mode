@@ -38,6 +38,7 @@ function readResult(p: Record<string, unknown>): ToolResultInfo {
   const text = p.content === undefined ? "" : typeof p.content === "string" ? p.content : JSON.stringify(p.content);
   const info: ToolResultInfo = { isError: p.isError === true, bytes: Buffer.byteLength(text), text };
   if (typeof p.exitCode === "number") info.exitCode = p.exitCode;
+  if (p.keep === true) info.keep = true;
   return info;
 }
 

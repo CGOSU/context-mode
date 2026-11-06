@@ -51,6 +51,16 @@ function golden(name, value) {
   checkGolden("GP5", name, normalize(value, { home: HOME, proj: PROJECT }));
 }
 
+function indexedSource(reply) {
+  const pointer = (reply.content?.[0]?.text ?? "").split("\n").find((line) => /^(?:more: )?ctx_search\(/.test(line));
+  assert.ok(pointer, "reply retains the retrieval pointer");
+  const match = pointer.match(/, source:("(?:\\.|[^"\\])*")\}\)$/);
+  assert.ok(match, "the pointer retains a complete JSON source value");
+  const source = JSON.parse(match[1]);
+  assert.match(source, /^ctx_(?:execute|batch):(?:\d+:\d+:)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?::|$)/);
+  return source;
+}
+
 async function withClient(fn) {
   const client = spawnBundle(SERVER_BUNDLE, ENV);
   await client.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "e2e", version: "0.0.0" } });
@@ -152,7 +162,8 @@ test("[M2] GP5/auto-index-exec-output", async () => {
   const reply = await withClient(async (c) => {
     const out = await c.request("tools/call", { name: "ctx_execute", arguments: { language: "javascript", code } });
     assert.equal(out.isError, false);
-    const hit = await c.request("tools/call", { name: "ctx_search", arguments: { queries: ["zebraquartz"], scope: "session" } });
+    const source = indexedSource(out);
+    const hit = await c.request("tools/call", { name: "ctx_search", arguments: { queries: ["zebraquartz"], scope: "session", source } });
     return hit;
   });
   const text = reply.content?.[0]?.text ?? "";
@@ -178,19 +189,24 @@ test("[M2] GP5/batch-execute-dedup-section", async () => {
 
 // D-M2-R4-1: one batch call ingests up to RETENTION_SIZE_CAP_BYTES (the real per-project cap);
 // no test-only budget knob exists through MCP, so this case runs at the real 500 MB scale (slow:
-// generating and ingesting 500 MB can take minutes). DEVIATIONS M2-C1 (commit body): at this
-// scale the EXEC_TIMEOUT_MS deadline (600 s, shared by exec + index) may end the ingest before the
-// byte budget does — src/core/tools/batch.ts's "Indexed <n> of <m> B." cut line is then prefixed
-// by the timeout cause text instead of starting the line. Either way the cut is real (idx.indexed
-// < idx.total), never a test-only knob, so this case accepts both causes.
+// generating and ingesting 500 MB can take minutes). Captured evidence is preserved after
+// execution stops, up to this storage budget. A storage cut is reported as an error; only
+// the indexed portion is searchable, and its exact source pointer must survive.
 test("[M2] GP5/batch-index-byte-budget", { timeout: 580_000 }, async () => {
   // fs.writeSync(1, ...) (not process.stdout.write, which buffers and can outrun the pipe at this
   // scale) so the whole 500 MB+ writes in well under a second, leaving the EXEC_TIMEOUT_MS budget
   // for indexing rather than for generating the fixture.
   const cmd = `node -e "const B=Buffer.from(('row needle '+'x'.repeat(40)+String.fromCharCode(10)).repeat(20000));const fs=require('fs');const need=Math.ceil((${RETENTION_SIZE_CAP_BYTES}+2000000)/B.length);for(let n=0;n<need;n++)fs.writeSync(1,B)"`;
-  const reply = await withClient((c) => c.request("tools/call", { name: "ctx_batch", arguments: { commands: [cmd], queries: ["needle"] } }));
+  const reply = await withClient(async (c) => {
+    const out = await c.request("tools/call", { name: "ctx_batch", arguments: { commands: [cmd], queries: ["needle"] } });
+    const source = indexedSource(out);
+    const found = await c.request("tools/call", { name: "ctx_search", arguments: { queries: ["needle"], source } });
+    assert.equal(found.isError, false);
+    assert.ok((found.content?.[0]?.text ?? "").includes("row needle"), "stored evidence is reachable by its exact source");
+    return out;
+  });
   const text = reply.content?.[0]?.text ?? "";
-  assert.equal(reply.isError, false, text);
+  assert.equal(reply.isError, true, text);
   const line = text.split("\n").find((l) => l.includes("Indexed ") && l.includes(" of ") && l.includes(" B."));
   assert.ok(line, "reply states the cut: " + text.slice(0, 400));
   const m = line.match(/Indexed (\d+) of (\d+) B\./);

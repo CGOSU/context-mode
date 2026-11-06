@@ -11,12 +11,81 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertOutPackageJson, buildMatcher, generateManifests } from "../build/manifests.ts";
 import { FATAL_VALUE, PROMPT, childEnv, fatalLog, scoreArm } from "../e2e/live/npm-package/claude-code.mjs";
+import { npmPackInfo } from "../e2e/harness/npm-pack.mjs";
 import { isReleaseVersion } from "../scripts/release/release-tags.mjs";
 import { ADAPTERS, getAdapter } from "../src/adapters/table.ts";
 import { COMPACT_POINTER_LINE, NODE_MIN, SERVER_KEY, TOOL_ORDER, prefixToolNames } from "../src/core/contracts/constants.ts";
 import { composeMatcher } from "../src/core/ops/doctor-config.ts";
 import { denyMessage } from "../src/core/policy/decide.ts";
 import { buildRegistry, renderSkill } from "../src/setup/registry.ts";
+
+describe("CGOSU Pi custom distribution", () => {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const source = JSON.parse(readFileSync(path.join(repo, "package.json"), "utf8"));
+  const script = path.join(repo, "scripts/build-pi.mjs");
+
+  function buildPi(out) {
+    return spawnSync(process.execPath, [script, "--out", out], {
+      cwd: repo, encoding: "utf8", timeout: 60_000,
+    });
+  }
+
+  test("builds a reproducible self-contained package with one Pi entry and its custom version", (t) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "cm-pi-distribution-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const out = path.join(dir, "package");
+    let built = buildPi(out);
+    assert.equal(built.status, 0, built.stderr);
+    const pkg = JSON.parse(readFileSync(path.join(out, "package.json"), "utf8"));
+    assertOutPackageJson(pkg);
+    assert.equal(pkg.version, source.piBuild.version);
+    assert.notEqual(pkg.version, source.piBuild.upstreamVersion);
+    assert.deepEqual(pkg.pi.extensions, ["./pi/index.js"]);
+    assert.deepEqual(pkg.pi.skills, ["./pi/skills"]);
+    assert.deepEqual(source.pi.extensions, ["./release-out/pi/index.js"]);
+    assert.deepEqual(source.pi.skills, ["./release-out/pi/skills"]);
+    assert.equal(pkg.dependencies, undefined);
+    assert.equal(pkg.devDependencies, undefined);
+    assert.equal(pkg.scripts, undefined);
+    assert.equal(existsSync(path.join(out, "node_modules")), false);
+    for (const name of ["description", "license", "repository", "homepage", "bugs"]) assert.deepEqual(pkg[name], source[name]);
+    for (const file of pkg.pi.extensions) assert.ok(statSync(path.resolve(out, file)).isFile());
+    for (const file of pkg.pi.skills) assert.ok(statSync(path.resolve(out, file)).isDirectory());
+
+    const readme = readFileSync(path.join(out, "README.md"), "utf8");
+    assert.ok(readme.startsWith("# CGOSU Pi custom build"));
+    assert.ok(readme.includes("Installed version: `" + pkg.version + "`"));
+    assert.ok(readme.includes("/blob/v" + source.piBuild.upstreamVersion + "/"));
+    assert.equal(readme.includes("/blob/v" + pkg.version + "/"), false);
+    const home = path.join(dir, "home");
+    mkdirSync(home);
+    const loaded = spawnSync(process.execPath, ["--input-type=module", "-e",
+      "const m = await import(process.argv[1]); if (typeof m.default !== 'function') process.exit(1); console.log('loaded');",
+      pathToFileURL(path.join(out, "pi/index.js")).href], {
+      cwd: dir, encoding: "utf8", timeout: 15_000,
+      env: { PATH: process.env.PATH ?? "", HOME: home, USERPROFILE: home, TMPDIR: dir, TEMP: dir, TMP: dir },
+    });
+    assert.equal(loaded.status, 0, loaded.stderr);
+    assert.equal(loaded.stdout.trim(), "loaded");
+
+    const hashes = readFileSync(path.join(out, "SHA256SUMS"), "utf8");
+    built = buildPi(out);
+    assert.equal(built.status, 0, built.stderr);
+    assert.equal(readFileSync(path.join(out, "SHA256SUMS"), "utf8"), hashes);
+    assert.deepEqual(readdirSync(dir).filter((name) => name.startsWith(".context-mode-pi-build-")), []);
+  });
+
+  test("refuses to overwrite an unrelated directory", (t) => {
+    const out = mkdtempSync(path.join(tmpdir(), "cm-pi-build-refusal-"));
+    t.after(() => rmSync(out, { recursive: true, force: true }));
+    writeFileSync(path.join(out, "notes.txt"), "keep this file");
+    const result = buildPi(out);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Refusing to replace/);
+    assert.equal(readFileSync(path.join(out, "notes.txt"), "utf8"), "keep this file");
+    assert.deepEqual(readdirSync(out), ["notes.txt"]);
+  });
+});
 
 // Sections are independent: each builds into its own temp dir and none changes process.env or the cwd, so they run concurrently.
 describe("ADR-0018 / ADR-0019 / ADR-0023 build, generated files, host manifests, npm package", { concurrency: CONC }, () => {
@@ -837,6 +906,16 @@ describe("ADR-0019 build: npm package", () => {
     readFileSync(path.join(out, "SHA256SUMS"), "utf8").split("\n").filter((l) => l !== "").map((l) => [l.slice(66), l.slice(0, 64)]);
   const cli = (args, input) => spawnSync(process.execPath, [path.join(out, "cli.mjs"), ...args], { encoding: "utf8", input, env: { ...process.env, NO_COLOR: "1" } });
 
+  test("build/npm-pack-json: npm 11 arrays and npm 12 keyed reports retain the same single manifest", () => {
+    const report = { name: "context-mode", version: "2.0.0", filename: "context-mode-2.0.0.tgz", files: [{ path: "package.json" }] };
+    for (const shape of [[report], { "context-mode": report }]) {
+      assert.deepEqual(npmPackInfo(JSON.stringify(shape)), report);
+    }
+    for (const shape of [null, {}, [], [report, report], { first: report, second: report }, [{ filename: report.filename }]]) {
+      assert.throws(() => npmPackInfo(JSON.stringify(shape)), /single package file manifest/);
+    }
+  });
+
   test("[M7] build/npm-d1-shape: release-out/package.json is the D1 package (bin cli.mjs, engines, files = the tree, pi kept)", () => {
     const pkg = JSON.parse(readFileSync(path.join(out, "package.json"), "utf8"));
     const top = readdirSync(out).filter((n) => n !== "package.json").sort();
@@ -864,7 +943,7 @@ describe("ADR-0019 build: npm package", () => {
   test("[NPM-README] build/npm-readme: npm pack --dry-run lists README.md and LICENSE, and no png", () => {
     const p = spawnSync(NPM, ["pack", "--dry-run", "--json"], { cwd: out, encoding: "utf8", shell: process.platform === "win32" });
     assert.equal(p.status, 0, p.stderr);
-    const listed = JSON.parse(p.stdout)[0].files.map((f) => f.path);
+    const listed = npmPackInfo(p.stdout).files.map((f) => f.path);
     assert.ok(listed.includes("README.md"), "README.md is in the tarball");
     assert.ok(listed.includes("LICENSE"), "LICENSE is in the tarball");
     assert.deepEqual(listed.filter((f) => f.endsWith(".png") || f.startsWith("docs/")), [], "no image or docs file in the tarball");
@@ -937,7 +1016,7 @@ describe("ADR-0019 build: npm package", () => {
     const dest = path.join(scratch, "pack");
     const p = spawnSync(NPM, ["pack", "--json", "--pack-destination", (spawnSync("mkdir", ["-p", dest]), dest)], { cwd: out, encoding: "utf8", shell: process.platform === "win32" });
     assert.equal(p.status, 0, p.stderr);
-    const [info] = JSON.parse(p.stdout);
+    const info = npmPackInfo(p.stdout);
     assert.equal(info.name, "context-mode");
     assert.equal(info.version, "2.0.0");
     const listed = info.files.map((f) => f.path).sort();
@@ -1052,7 +1131,7 @@ describe("ADR-0023 build: native host manifests", () => {
     mkdirSync(dest);
     const p = spawnSync(NPM, ["pack", "--json", "--pack-destination", dest], { cwd: out, encoding: "utf8", shell: process.platform === "win32" });
     assert.equal(p.status, 0, p.stderr);
-    const [info] = JSON.parse(p.stdout);
+    const info = npmPackInfo(p.stdout);
     const ex = path.join(scratch, "x");
     mkdirSync(ex);
     const t = spawnSync("tar", ["-xzf", path.join(dest, info.filename), "-C", ex], { encoding: "utf8" });

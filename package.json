@@ -30,9 +30,18 @@
   "bugs": {
     "url": "https://github.com/mksglu/context-mode/issues"
   },
+  "pi": {
+    "extensions": ["./release-out/pi/index.js"],
+    "skills": ["./release-out/pi/skills"]
+  },
+  "piBuild": {
+    "upstreamVersion": "2.1.4",
+    "version": "2.1.4-pi.1"
+  },
   "scripts": {
     "build": "node build/build.mjs --out release-out",
     "build:release": "node build/build.mjs --out release-out",
+    "build:pi": "node scripts/build-pi.mjs",
     "typecheck": "tsc --noEmit",
     "gate": "node scripts/gate.mjs",
     "e2e": "node e2e/cases/run.mjs"

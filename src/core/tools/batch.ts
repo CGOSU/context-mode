@@ -4,6 +4,7 @@
 // (journal facts), D-M2-4 (no run-wrapper in M2), D-M2-6 (whole chunks, capBytes is a final bound),
 // D-M2-T11-1, D-M2-R4-1 (ingest byte budget, #961).
 import { z } from "zod/v4";
+import { randomUUID } from "node:crypto";
 import {
   CANCELLED_LINE, ECHO_MAX_BYTES, EXEC_TIMEOUT_MS, INDEX_WRITE_CHUNK, OUTPUT_CAP, RETENTION_SIZE_CAP_BYTES, SEARCH_PAGE_SIZE,
 } from "../contracts/constants.ts";
@@ -14,7 +15,7 @@ import { canonicalKey } from "../journal/append.ts";
 import { capBytes } from "../sandbox/cap.ts";
 import { buildChildEnv } from "../sandbox/env.ts";
 import { findRuntime, noRuntimeError } from "../sandbox/runtimes.ts";
-import { runProcess } from "../sandbox/spawn.ts";
+import { runProcess, type RunResult } from "../sandbox/spawn.ts";
 import { closeDb, openDb } from "../store/db.ts";
 import { ftsInsert, ftsQuery, nextLabelSerial } from "../store/fts.ts";
 import { unknownField } from "./search.ts";
@@ -72,41 +73,45 @@ export async function runPool<T>(
 
 // ---- steps 2-4, 11: run the commands ----
 
-interface CmdOut { head: string; block: string; exitCode: number | null; bytes: number; error: string | null; }
+type CommandStatus = "completed" | "failed" | "timed_out" | "cancelled" | "skipped";
+interface CmdOut { head: string; block: string; exitCode: number | null; bytes: number; error: string | null; status: CommandStatus; }
 
 function headOf(cmd: string): string {
   return MARKER + cmd + LINE_SEP;
 }
 
-function stoppedAt(cmd: string, error: string): CmdOut {
-  return { head: headOf(cmd), block: headOf(cmd) + error, exitCode: null, bytes: 0, error };
+function stoppedAt(cmd: string, error: string, status: CommandStatus = "failed", r?: RunResult): CmdOut {
+  const partial = r === undefined ? "" : r.stdout.toString("utf8") + r.stderr.toString("utf8");
+  return { head: headOf(cmd), block: headOf(cmd) + error + (partial === "" ? "" : "\n" + partial),
+    exitCode: r?.exitCode ?? null, bytes: Buffer.byteLength(partial), error, status };
 }
 
 async function runCommand(cmd: string, shell: string | null, ctx: ToolContext, deadline: number, boundMs: number): Promise<CmdOut> {
   if (shell === null) return stoppedAt(cmd, noRuntimeError(SHELL).toLine());
   const left = deadline - Date.now();
-  if (left <= 0) return stoppedAt(cmd, formatError("TIMEOUT", { ms: boundMs }));
+  if (left <= 0) return stoppedAt(cmd, formatError("TIMEOUT", { ms: boundMs }), "timed_out");
   const r = await runProcess([shell, SHELL_INLINE_FLAG, cmd], {
     cwd: ctx.project.worktree,
     env: buildChildEnv(process.env),
     signal: ctx.signal,
     timeoutMs: left,
   });
-  if (r.killed === "timeout") return stoppedAt(cmd, formatError("TIMEOUT", { ms: boundMs }));
-  if (r.killed === "cancel") return stoppedAt(cmd, CANCELLED_LINE);
-  if (r.exitCode === null && r.stdout.length === 0 && r.stderr.length === 0) {
-    return stoppedAt(cmd, formatError("SPAWN_FAILED", { detail: shell }));
+  if (r.killed === "timeout") return stoppedAt(cmd, formatError("TIMEOUT", { ms: boundMs }), "timed_out", r);
+  if (r.killed === "cancel") return stoppedAt(cmd, CANCELLED_LINE, "cancelled", r);
+  if (r.exitCode === null) {
+    return stoppedAt(cmd, formatError("SPAWN_FAILED", { detail: shell }), "failed", r);
   }
   // impl/04 §2.3 step 12: stderr only on a non-zero exit.
   const withErr = r.exitCode !== 0;
   const out = r.stdout.toString("utf8") + (withErr ? r.stderr.toString("utf8") : "");
-  return { head: headOf(cmd), block: headOf(cmd) + out, exitCode: r.exitCode, bytes: r.stdout.length + (withErr ? r.stderr.length : 0), error: null };
+  return { head: headOf(cmd), block: headOf(cmd) + out, exitCode: r.exitCode,
+    bytes: r.stdout.length + (withErr ? r.stderr.length : 0), error: null, status: withErr ? "failed" : "completed" };
 }
 
 // ---- step 5: index, in INDEX_WRITE_CHUNK groups with the deadline checked before each group ----
 
-/** Why indexing stopped before the end: the Q8 deadline (or a cancel), or the ingest byte budget. */
-type IndexStop = "deadline" | "budget" | null;
+/** A byte budget can limit stored evidence; execution cancellation cannot discard captured bytes. */
+type IndexStop = "budget" | null;
 interface Indexed { bodies: Map<string, string>; raw: Map<string, string>; ids: number[]; indexed: number; total: number; stop: IndexStop; }
 
 function chunkKey(sourceId: number, ord: number): string {
@@ -131,7 +136,7 @@ function shown(chunks: Chunk[], heads: string[]): string[] {
 // D-M2-R4-1 (#961): one call ingests at most `budgetBytes` (the tool passes RETENTION_SIZE_CAP_BYTES).
 // Whole chunks only, in output order: the first chunk that would pass the budget ends the ingest and
 // the reply says how many bytes were indexed. No chunk is cut.
-function indexCombined(db: DbHandle, ctx: ToolContext, label: string, ran: CmdOut[], deadline: number, budgetBytes: number): Indexed {
+function indexCombined(db: DbHandle, ctx: ToolContext, label: string, ran: CmdOut[], budgetBytes: number): Indexed {
   const chunks = chunkText(ran.map((r) => r.block).join(BLOCK_SEP), "text");
   const display = shown(chunks, ran.map((r) => r.head));
   const bodies = new Map<string, string>();
@@ -143,11 +148,10 @@ function indexCombined(db: DbHandle, ctx: ToolContext, label: string, ran: CmdOu
   let queued = 0;
   let group: Chunk[] = [];
   let groupBytes = 0;
-  const flush = (): boolean => {
-    if (group.length === 0) return true;
-    // D-M2-T11-1: the first group is always written, so a timed-out batch still indexes what ran
-    // (A14); every later group needs time left (Q8). Overrun: at most one INDEX_WRITE_CHUNK write.
-    if (ctx.signal.aborted || (indexed > 0 && Date.now() >= deadline)) return false;
+  const flush = (): void => {
+    if (group.length === 0) return;
+    // The child execution deadline has ended by now. Finish preserving its
+    // captured output even after timeout/cancellation, bounded by budgetBytes.
     const id = ftsInsert(db, {
       projectKey: ctx.project.projectKey,
       sessionId: ctx.sessionId,
@@ -164,20 +168,19 @@ function indexCombined(db: DbHandle, ctx: ToolContext, label: string, ran: CmdOu
     indexed += groupBytes;
     group = [];
     groupBytes = 0;
-    return true;
   };
   for (const c of chunks) {
     if (queued + c.bytes > budgetBytes) {
-      const stop: IndexStop = flush() ? "budget" : "deadline"; // flush first: it adds to `indexed`
-      return { bodies, raw, ids, indexed, total, stop };
+      flush();
+      return { bodies, raw, ids, indexed, total, stop: "budget" };
     }
-    if (group.length > 0 && groupBytes + c.bytes > INDEX_WRITE_CHUNK && !flush()) return { bodies, raw, ids, indexed, total, stop: "deadline" };
+    if (group.length > 0 && groupBytes + c.bytes > INDEX_WRITE_CHUNK) flush();
     group.push(c);
     groupBytes += c.bytes;
     queued += c.bytes;
   }
-  const stop: IndexStop = flush() ? null : "deadline";
-  return { bodies, raw, ids, indexed, total, stop };
+  flush();
+  return { bodies, raw, ids, indexed, total, stop: null };
 }
 
 // ---- steps 6-8: answer each query inside its share ----
@@ -241,33 +244,52 @@ export async function runBatch(input: unknown, ctx: ToolContext, boundMs: number
   const ran = pool.results;
   const last = ran[ran.length - 1];
   const sandboxBytes = ran.reduce((n, r) => n + r.bytes, 0);
+  const outputCap = ctx.outputBudgetBytes ?? OUTPUT_CAP;
+  const commandResults = commands.map((_command, index) => {
+    const r = ran[index];
+    return { index: index + 1, status: r?.status ?? "skipped", exitCode: r?.exitCode ?? null,
+      ...(r?.error ? { error: r.error } : {}) };
+  });
+  const failed = ran.find((r) => r.status !== "completed");
+  const status: CommandStatus = ran.some((r) => r.status === "cancelled") ? "cancelled"
+    : ran.some((r) => r.status === "timed_out") ? "timed_out" : failed ? "failed" : "completed";
+  const exitCode = failed ? failed.exitCode : last.exitCode;
+  const journal = { kind: "cmd" as const, key: canonicalKey(TOOL, commands.join(LINE_SEP)), path: null, exit_code: exitCode };
+  const details = { status, exitCode, commandResults };
+  // A later success must never hide an earlier failure. Keep the outcome before
+  // previews; the full per-command list also survives in structured details.
+  const counts = ["completed", "failed", "timed_out", "cancelled", "skipped"]
+    .map((state) => [state, commandResults.filter((r) => r.status === state).length] as const)
+    .filter(([, n]) => n > 0).map(([state, n]) => n + " " + state).join(", ");
+  const problems = commandResults.filter((r) => r.status !== "completed");
+  const outcomes = problems.slice(0, 8).map((r) => "#" + r.index + " " + r.status + (r.exitCode === null ? "" : " (exit " + r.exitCode + ")")).join("; ");
+  const statusLine = failed ? "Batch " + status + ": " + counts + ".\n" + outcomes + (problems.length > 8 ? "; more statuses in details" : "") : null;
 
   try {
     const db = await openDb(ctx.project);
     // D-BATCH-OWN-SOURCE-1: one label per call, so `source` in ctx_search names this call's output only.
     // Labels of older versions ("ctx_batch:<turn>") stay in the store and stay readable by `source`.
     const turnPrefix = LABEL_PREFIX + ctx.turn + LABEL_SEP;
-    const label = turnPrefix + nextLabelSerial(db, ctx.sessionId, turnPrefix);
+    // Follow-up search defaults to worktree scope, so session-local serials alone
+    // can mix two sessions' first batch. The suffix also separates concurrent calls.
+    const label = turnPrefix + nextLabelSerial(db, ctx.sessionId, turnPrefix) + LABEL_SEP + randomUUID();
     let sections: string[];
     let idx: Indexed;
-    // D-BATCH-FRAMING-1: no counts line (the caller holds its commands and queries); the exit code only when it is news.
-    const exitLine = last.exitCode === null || last.exitCode === 0 ? null : "exit " + last.exitCode;
     // Step 8 template, `[...]` kept as written (D-M2-T11-1): the caller holds its queries.
     const footer = "more: ctx_search({queries:[...], source:" + JSON.stringify(label) + "})";
     let notice: string | null;
     let showMore: boolean;
     try {
       // Steps 3-5: what ran is indexed, a stopped command's block carries its error line.
-      idx = indexCombined(db, ctx, label, ran, deadline, budgetBytes);
+      idx = indexCombined(db, ctx, label, ran, budgetBytes);
       const stop = last.error;
       const cut = idx.indexed < idx.total ? "Indexed " + idx.indexed + " of " + idx.total + " B." : null;
-      const timeout = formatError("TIMEOUT", { ms: boundMs });
       // The cause in front of the cut line: a stopped command, else a cancel, else what ended the ingest.
-      const cause = stop ?? (ctx.signal.aborted ? CANCELLED_LINE : idx.stop === "deadline" ? timeout : null);
+      const cause = stop ?? (ctx.signal.aborted ? CANCELLED_LINE : null);
       notice = cut === null ? stop : cause === null ? cut : cause + " " + cut;
       // The footer budget is reserved always, so printing it later never pushes the reply past OUTPUT_CAP.
-      const fixed = (exitLine === null ? 0 : bytes(exitLine) + 1) + (notice === null ? 0 : bytes(notice) + 1) + bytes(footer);
-      const share = Math.floor((OUTPUT_CAP - fixed) / queries.length);
+      const fixed = (statusLine === null ? 0 : bytes(statusLine) + 1) + (notice === null ? 0 : bytes(notice) + 1) + bytes(footer);
+      const share = Math.max(0, Math.floor((outputCap - fixed) / queries.length));
       const answered = answer(db, ctx, idx.ids, queries, share, idx.bodies);
       sections = answered.lines;
       // Output no query showed: a little is printed with its marker (cheaper than the pointer, and nothing
@@ -280,16 +302,25 @@ export async function runBatch(input: unknown, ctx: ToolContext, boundMs: number
     } finally {
       closeDb(db);
     }
-    const lines = [...(exitLine === null ? [] : [exitLine]), ...(notice === null ? [] : [notice]), ...sections, ...(showMore ? [footer] : [])];
+    const incomplete = idx.indexed < idx.total;
+    const lines = [...(statusLine === null ? [] : [statusLine]), ...(notice === null ? [] : [notice]),
+      // Source pointers precede preview text, so a later host-specific cap cannot remove them.
+      ...((showMore || failed !== undefined) && idx.ids.length > 0 ? [footer] : []), ...sections];
     return {
-      text: capBytes(lines.join(LINE_SEP), OUTPUT_CAP).text, // step 10: final bound (D-M2-6)
-      isError: false, // step 11
+      text: capBytes(lines.join(LINE_SEP), outputCap).text,
+      isError: failed !== undefined || incomplete,
       sandboxBytes,
-      journal: { kind: "cmd", key: canonicalKey(TOOL, commands.join(LINE_SEP)), path: null, exit_code: last.exitCode },
+      journal,
+      details: { ...details, status: status === "completed" && incomplete ? "failed" : status,
+        ...(idx.ids.length > 0 ? { source: label, sourceIds: idx.ids } : {}),
+        outputStored: idx.ids.length > 0, evidenceComplete: !incomplete,
+        indexedBytes: idx.indexed, totalBytes: idx.total },
     };
   } catch (err) {
-    if (err instanceof CtxError) return { text: err.toLine(), isError: true, sandboxBytes };
-    throw err;
+    const reason = err instanceof CtxError ? err.toLine() : err instanceof Error ? err.message : "storage unavailable";
+    const prefix = (statusLine === null ? "" : statusLine + "\n") + "Output not indexed; preview only: " + reason + "\n";
+    return { text: capBytes(prefix + ran.map((r) => r.block).join(BLOCK_SEP), outputCap).text,
+      isError: true, sandboxBytes, journal, details: { ...details, outputStored: false, indexingFailed: true } };
   }
 }
 

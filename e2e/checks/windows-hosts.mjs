@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { vscodeMcpFile } from "../harness/vscode-user-dir.mjs";
+import { npmPackInfo } from "../harness/npm-pack.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WIN = process.platform === "win32";
@@ -411,7 +412,7 @@ async function main() {
   if (build.status !== 0) { record("package", "build", false, tail(build.stderr + build.stdout)); return; }
   const pack = run(npmBin, ["pack", "--json", "--pack-destination", packDir], { cwd: outDir, env: baseEnv });
   if (pack.status !== 0) { record("package", "pack", false, tail(pack.stderr)); return; }
-  const tarball = path.join(packDir, JSON.parse(pack.stdout)[0].filename);
+  const tarball = path.join(packDir, npmPackInfo(pack.stdout).filename);
   const inst = run(npmBin, ["i", "-g", "--prefix", prefix, "--no-audit", "--no-fund", tarball], { env: baseEnv, timeout: INSTALL_TIMEOUT_MS });
   if (inst.status !== 0) { record("package", "npm-i-g", false, tail(inst.stderr)); return; }
   const ver = run(cmBin, ["--version"], { env: baseEnv });

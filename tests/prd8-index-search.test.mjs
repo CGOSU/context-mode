@@ -1836,17 +1836,18 @@ describe("PRD-v2 section 8: stage 1 (concurrent)", { concurrency: CONC }, () => 
       });
 
       // W1-core PORT of tests/core/server.test.ts "Non-zero Exit Code Classification" (v1 isError rules) to ctx_execute.
-      // v2 class (impl/04 step 12, GP4): shell exit 1 with empty stderr is not an error; stderr or exit >= 2 or a
-      // non-shell runtime exiting non-zero is. The v1 "shell exit 1 with empty stdout is an error" row is NOT carried:
-      // v2 decided grep no-match (exit 1, no output) is a clean result.
-      test("[W1-core] exit class: shell exit 1 with stdout is ok; exit 2 and 127 are errors; javascript exit 1 is an error", async () => {
+      // A nonzero process exit stays an error even when stderr is empty; stdout is still available as evidence.
+      test("[W1-core] exit class: shell exits 1, 2 and 127 are errors; javascript exit 1 is an error", async () => {
         const root = realpathSync(mkdtempSync(join(tmpdir(), "cm-exit-")));
         try {
           const ctx = ctxFor(root);
           const run = (language, code) => ctxExecute.handler({ language, code }, ctx);
-          const soft = await run("shell", "echo out; exit 1");
-          assert.equal(soft.isError, false);
-          assert.ok(soft.text.includes("out"));
+          const failed = await run("shell", "echo out; exit 1");
+          assert.equal(failed.isError, true);
+          assert.equal(failed.details.status, "failed");
+          assert.equal(failed.details.exitCode, 1);
+          assert.ok(failed.text.includes("out"));
+          assert.equal((await run("shell", "exit 1")).isError, true);
           assert.equal((await run("shell", "echo e >&2; exit 2")).isError, true);
           const nf = await run("shell", "nonexistcmd_zz");
           assert.equal(nf.isError, true);
@@ -2557,10 +2558,14 @@ describe("PRD-v2 section 8: stage 1 (concurrent)", { concurrency: CONC }, () => 
 
       test("[NLC] execute: a huge intent never cuts the pointer", async (t) => {
         const ctx = ctxFor(t);
-        const r = await ctxExecute.handler({ language: "shell", code: "yes line | head -n 20000", intent: "x".repeat(20000) }, ctx);
+        const r = await ctxExecute.handler({ language: "shell", code: "yes line | head -n 20000; printf 'EXEC_NLC_TAIL\\n'", intent: "x".repeat(20000) }, ctx);
         assert.ok(B(r.text) <= C.OUTPUT_CAP);
-        assert.ok(r.text.endsWith("})"), r.text.slice(-80));
-        assert.ok(r.text.includes("ctx_search("));
+        assert.equal(r.isError, false);
+        assert.match(r.details.source, /^ctx_execute:[0-9a-f-]{36}:/);
+        assert.equal(r.text.split("\n")[1], "ctx_search({queries:[...], source:" + JSON.stringify(r.details.source) + "})", "the complete pointer precedes the preview");
+        const found = await ctxSearch.handler({ queries: ["EXEC_NLC_TAIL"], source: r.details.source }, ctx);
+        assert.equal(found.isError, false);
+        assert.match(found.text, /EXEC_NLC_TAIL/);
       });
 
       test("[NLC] execute: a normal intent is echoed whole in the pointer", async (t) => {
@@ -2569,12 +2574,17 @@ describe("PRD-v2 section 8: stage 1 (concurrent)", { concurrency: CONC }, () => 
         assert.ok(r.text.includes('queries:["line"]'));
       });
 
-      test("[NLC] batch: huge queries are named by position, the footer pointer survives", async (t) => {
+      test("[NLC] batch: huge queries are named by position, the exact source pointer survives", async (t) => {
         const ctx = ctxFor(t);
-        const r = await ctxBatch.handler({ commands: ["yes line | head -n 5000"], queries: ["q".repeat(9000), "w".repeat(9000)] }, ctx);
+        const r = await ctxBatch.handler({ commands: ["yes line | head -n 5000; printf 'BATCH_NLC_TAIL\\n'"], queries: ["q".repeat(9000), "w".repeat(9000)] }, ctx);
         assert.ok(B(r.text) <= C.OUTPUT_CAP);
         assert.ok(r.text.includes("## query 1") && r.text.includes("## query 2"));
-        assert.ok(r.text.endsWith("})") && r.text.includes('source:"ctx_batch:1:1"'));
+        assert.equal(r.isError, false);
+        assert.match(r.details.source, /^ctx_batch:1:1:[0-9a-f-]{36}$/);
+        assert.equal(r.text.split("\n")[0], "more: ctx_search({queries:[...], source:" + JSON.stringify(r.details.source) + "})", "the complete pointer precedes the preview");
+        const found = await ctxSearch.handler({ queries: ["BATCH_NLC_TAIL"], source: r.details.source }, ctx);
+        assert.equal(found.isError, false);
+        assert.match(found.text, /BATCH_NLC_TAIL/);
       });
 
       test("[NLC] index: a huge label is stored whole and named by its handle in the reply", async (t) => {
@@ -2894,9 +2904,9 @@ describe("PRD-v2 section 8: stage 1 (concurrent)", { concurrency: CONC }, () => 
       for (const [name, a] of calls) {
         try {
           const r = await tools.get(name).execute("call-" + out.length, a);
-          out.push({ text: r.content[0].text, isError: false });
+          out.push({ text: r.content[0].text, isError: r.isError === true });
         } catch (err) {
-          out.push({ text: err.message, isError: true }); // Pi marks a failed call by a throw
+          out.push({ text: err.message, isError: true }); // Unexpected host exceptions are failures too.
         }
       }
       return { out };

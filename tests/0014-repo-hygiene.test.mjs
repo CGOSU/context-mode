@@ -413,8 +413,9 @@ describe("ADR-0015 repo: no TRUNCATE and no lossy cut", () => {
     assert.deepEqual(hits, [], `user-facing text must not say truncat:\n${hits.join("\n")}`);
   });
 
-  // Every capBytes call site is listed as lossless in docs/architecture/NO-LOSSY-CUT.md (same file, same count).
-  test("no-lossy-cut: every capBytes call site is a lossless row in NO-LOSSY-CUT.md", () => {
+  // Every capBytes call is documented. Storage failures cannot honestly be called
+  // lossless: only the audited execute/batch paths may declare that exception.
+  test("no-lossy-cut: every capBytes call site has an audited verdict in NO-LOSSY-CUT.md", () => {
     const table = readFileSync("docs/architecture/NO-LOSSY-CUT.md", "utf8").split("\n").filter((l) => l.startsWith("|"));
     const calls = new Map();
     for (const root of ROOTS) {
@@ -426,8 +427,15 @@ describe("ADR-0015 repo: no TRUNCATE and no lossy cut", () => {
     }
     assert.ok(calls.size > 0);
     for (const [file, n] of calls) {
-      const rows = table.filter((l) => l.includes("| " + file + ":") && l.includes("capBytes") && l.includes("| lossless |"));
-      assert.equal(rows.length, n, `${file}: ${n} capBytes call(s), ${rows.length} lossless row(s) in NO-LOSSY-CUT.md`);
+      const rows = table.filter((l) => l.includes("| " + file + ":") && l.includes("capBytes"));
+      assert.equal(rows.length, n, `${file}: ${n} capBytes call(s), ${rows.length} documented row(s) in NO-LOSSY-CUT.md`);
+      const exceptions = file === "src/core/tools/execute.ts" ? ["explicit failure"]
+        : file === "src/core/tools/batch.ts" ? ["conditional", "explicit failure"] : [];
+      const declared = rows.map((l) => l.split("|").at(-2).trim());
+      assert.deepEqual(declared.filter((v) => v !== "lossless").sort(), exceptions.sort(), `${file}: unexpected lossless exceptions`);
+      for (const row of rows.filter((l) => l.includes("| explicit failure |"))) {
+        assert.ok(row.includes("isError:true") && row.includes("outputStored:false") && row.includes("no source"), `${file}: failure must be visible and cannot claim a searchable source`);
+      }
     }
   });
 });

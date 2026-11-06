@@ -882,7 +882,7 @@ describe("ADR-0019 release: npm tarball check and publish job", () => {
     return d;
   }
   const PKG = JSON.stringify({ name: "context-mode", version: "2.0.0", type: "module", bin: { "context-mode": "cli.mjs" } }, null, 2) + "\n";
-  const run = (d) => spawnSync(process.execPath, [path.join(REPO, "scripts", "release", "check-npm-tarball.mjs"), d], { encoding: "utf8", env: { ...process.env, npm_config_cache: path.join(d, "..", "cm-npm-cache") } });
+  const run = (d, nodeArgs = []) => spawnSync(process.execPath, [...nodeArgs, path.join(REPO, "scripts", "release", "check-npm-tarball.mjs"), d], { encoding: "utf8", env: { ...process.env, npm_config_cache: path.join(d, "..", "cm-npm-cache") } });
 
   const DOCS = { "README.md": "# Context Mode\n", LICENSE: "Elastic License 2.0\n" };
 
@@ -891,6 +891,34 @@ describe("ADR-0019 release: npm tarball check and publish job", () => {
     t.after(() => rmSync(d, { recursive: true, force: true }));
     const r = run(d);
     assert.equal(r.status, 0, r.stdout + r.stderr);
+  });
+
+  test("check-npm-tarball: accepts npm 11 array and npm 12 object manifests and rejects empty output", (t) => {
+    const harness = mkdtempSync(path.join(tmpdir(), "cm-npm-pack-shape-"));
+    t.after(() => rmSync(harness, { recursive: true, force: true }));
+    for (const shape of ["array", "object", "empty"]) {
+      const d = tree({ "package.json": PKG, "cli.mjs": "#!/usr/bin/env node\n", "server.mjs": "x\n", ...DOCS });
+      t.after(() => rmSync(d, { recursive: true, force: true }));
+      const hook = path.join(harness, `${shape}.mjs`);
+      // Keep npm's actual archive, file list and hashes; vary only its version-dependent JSON envelope.
+      writeFileSync(hook, `import cp from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const spawn = cp.spawnSync;
+cp.spawnSync = (cmd, args, opts) => {
+  const result = spawn(cmd, args, opts);
+  if (cmd === "npm" && args[0] === "pack" && result.status === 0) {
+    const parsed = JSON.parse(result.stdout);
+    const info = (Array.isArray(parsed) ? parsed : Object.values(parsed))[0];
+    result.stdout = JSON.stringify(${JSON.stringify(shape)} === "empty" ? {} : ${JSON.stringify(shape)} === "array" ? [info] : { [info.name]: info });
+  }
+  return result;
+};
+syncBuiltinESMExports();
+`);
+      const r = run(d, ["--import", pathToFileURL(hook).href]);
+      assert.equal(r.status, shape === "empty" ? 1 : 0, shape + "\n" + r.stdout + r.stderr);
+      if (shape === "empty") assert.match(r.stdout, /npm pack returned no single package file manifest/);
+    }
   });
 
   // D-NPM-README-1: next.21 and next.22 shipped with no README.md, so the npm page was empty.

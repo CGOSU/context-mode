@@ -523,13 +523,15 @@ describe("ADR-0020 plugins", () => {
       assert.ok(out && typeof out === "object");
     });
 
-    test("registered ctx_stats runs in process, invalid args throw the plain-text line and never a fence (#1094)", async () => {
+    test("registered ctx_stats runs in process, invalid args return an error with a plain-text line and never a fence (#1094)", async () => {
       const { pi, handlers, tools } = fakePi();
       piExtension(pi);
       await handlers.get("before_agent_start")({ systemPrompt: "" }, ctxFor("s8"));
       const ok = await tools.get("ctx_stats").execute("c1", {});
       assert.equal(ok.content[0].type, "text");
-      await assert.rejects(tools.get("ctx_search").execute("c2", { queries: 12345 }), (err) => err instanceof Error && !err.message.startsWith("```"));
+      const invalid = await tools.get("ctx_search").execute("c2", { queries: 12345 });
+      assert.equal(invalid.isError, true);
+      assert.ok(!invalid.content[0].text.startsWith("```"));
     });
 
     test("per-instance state: two extension instances keep separate sessions and leave no module state (#983)", async () => {
@@ -559,9 +561,20 @@ describe("ADR-0020 plugins", () => {
     test("[D-R38-PI-EDIT-1] tool_result: Pi edit and write calls are journaled and ctx_resume names both files", async () => {
       const { pi, handlers, tools } = fakePi();
       piExtension(pi);
-      await handlers.get("before_agent_start")({ systemPrompt: "" }, ctxFor("s-edit"));
+      // Pi's current-branch summary uses persisted transcript ancestry, never the unscoped journal.
+      const entries = [];
+      const ctx = ctxFor("s-edit");
+      ctx.sessionManager.getBranch = () => entries;
+      ctx.sessionManager.getLeafId = () => entries.at(-1)?.id ?? null;
+      await handlers.get("before_agent_start")({ systemPrompt: "" }, ctx);
       for (const [toolName, input] of [["edit", { path: "pi-edited.txt", edits: [] }], ["write", { path: "pi-written.txt", content: "x" }]]) {
-        await handlers.get("tool_result")({ toolName, toolCallId: toolName + "1", input, content: [{ type: "text", text: "ok" }], isError: false }, ctxFor("s-edit"));
+        entries.push({ id: toolName + "-call", type: "message", message: { role: "assistant", content: [
+          { type: "toolCall", id: toolName + "1", name: toolName, arguments: input },
+        ] } });
+        await handlers.get("tool_result")({ toolName, toolCallId: toolName + "1", input, content: [{ type: "text", text: "ok" }], isError: false }, ctx);
+        entries.push({ id: toolName + "-result", type: "message", message: { role: "toolResult",
+          toolName, toolCallId: toolName + "1", content: [{ type: "text", text: "ok" }], isError: false,
+        } });
       }
       const text = (await tools.get("ctx_resume").execute("r1", {})).content[0].text;
       assert.ok(text.includes("pi-edited.txt"), text);

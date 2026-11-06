@@ -258,12 +258,13 @@ describe("ADR-0007 call shape on every host", () => {
 
   for (const [name, input] of BAD) {
     const tool = TOOLS.find((t) => t.name === name);
-    test(`Pi ${name} ${JSON.stringify(input)}: the thrown line shows the exact call`, async () => {
+    test(`Pi ${name} ${JSON.stringify(input)}: the structured error line shows the exact call`, async () => {
       const pi = await fakePi();
-      await assert.rejects(
-        () => pi.get(name).execute("c1", input),
-        (err) => oneLine(err.message) && err.message.includes(exampleOf(tool.description)),
-      );
+      const out = await pi.get(name).execute("c1", input);
+      assert.equal(out.isError, true);
+      assert.ok(oneLine(out.content[0].text));
+      assert.ok(out.content[0].text.includes(exampleOf(tool.description)));
+      assert.equal(typeof out.details, "object");
     });
 
     test(`OpenCode ${name} ${JSON.stringify(input)}: the returned line shows the exact call`, async () => {
