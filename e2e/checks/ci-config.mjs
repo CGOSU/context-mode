@@ -23,13 +23,8 @@ function main() {
     return fail("ci.yml must have no pull_request trigger (ADR-0012)");
   }
 
-  const pushBlock = src.match(/\bpush:\s*\n([\s\S]*?)(\n\S|\n\s*\w+:\s*\n|$)/);
-  const pushText = pushBlock ? pushBlock[0] : "";
-  if (!/branches:\s*\n\s*-\s*v2-design/.test(pushText) && !pushText.includes("v2-design")) {
-    return fail("ci.yml push.branches must include v2-design");
-  }
-
-  if (!pushText.includes("impl/**")) return fail("ci.yml push.branches must include impl/**");
+  if (/^\s{2}push\s*:/m.test(src)) return fail("ci.yml must not run on push");
+  if (!/^\s{2}workflow_call\s*:/m.test(src)) return fail("ci.yml must remain callable by release.yml");
   if (!/runner\.os == 'Windows'[\s\S]{0,200}windows-grandchild-kill|windows-grandchild-kill[\s\S]{0,200}runner\.os == 'Windows'/.test(src)) {
     return fail("ci.yml needs a windows-only T-F5 step");
   }

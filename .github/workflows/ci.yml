@@ -1,12 +1,9 @@
 # v2 CI (docs/architecture/modules/13-build-release.md §8, impl/14-tests.md §8, TECH-SPEC §6.6).
 # 3 OS x 2 Node lines. No live layer, no secrets, no key env (ADR-0012).
-# Pull requests are disabled on the repo (ADR-0014 §5), so push is the only event trigger.
-# release.yml reuses this job through workflow_call (impl/13 A10).
+# Invoked by release.yml; ordinary pushes do not start these checks.
 name: ci
 
 on:
-  push:
-    branches: [main, v2, v2-design, "impl/**"]
   workflow_call:
 
 permissions:

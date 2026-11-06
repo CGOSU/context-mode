@@ -641,12 +641,11 @@ describe("ADR-0013 repo: scheduled workflows", () => {
     assert.ok(!y.includes("npm publish"));
   });
 
-  test("ci.yml: push branches include v2-design and impl/**, no pull_request (ADR-0014 5)", () => {
+  test("ci.yml: callable by release, no push or pull_request trigger", () => {
     const y = read(".github/workflows/ci.yml");
-    const l = lines(y);
-    const b = l.find((x) => x.startsWith("branches: ["));
-    assert.ok(b && b.includes("v2-design") && b.includes('"impl/**"'), b);
-    assert.ok(!l.some((x) => x.startsWith("pull_request")));
+    assert.match(y, /^  workflow_call:/m);
+    assert.doesNotMatch(y, /^  (push|pull_request):/m);
+    assert.match(read(".github/workflows/release.yml"), /uses: \.\/\.github\/workflows\/ci\.yml/);
   });
 
   test("ci.yml: windows-only T-F5 step runs the check (DECISIONS-r9 F5)", () => {
