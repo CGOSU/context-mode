@@ -1,5 +1,4 @@
 import { build } from "esbuild";
-import { mkdir, copyFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,9 +22,4 @@ if (!args.includes("--extension-only")) {
 }
 if (!args.includes("--server-only")) {
   await build({ ...common, entryPoints: ["src/adapters/pi/extension.ts"], outfile: resolve(outdir, "build/adapters/pi/extension.js"), packages: "external" });
-}
-// The extension loads this source helper dynamically; esbuild cannot include it.
-if (!args.includes("--server-only") && outdir !== root) {
-  await mkdir(resolve(outdir, "hooks"), { recursive: true });
-  await copyFile(resolve(root, "hooks/auto-injection.mjs"), resolve(outdir, "hooks/auto-injection.mjs"));
 }

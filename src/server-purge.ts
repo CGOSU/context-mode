@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
@@ -8,7 +8,7 @@ import { coerceBoolean } from "./server-input.js";
 import type { ServerToolContext } from "./server.js";
 
 export function registerPurgeTool(context: ServerToolContext): void {
-  const { server, trackResponse, getStorePath, getProjectDir, getSessionDir, sessionStats, getStatsFilePath } = context;
+  const { server, trackResponse, getStorePath, getProjectDir, getSessionDir, sessionStats } = context;
 
 
 // ── ctx-purge: explicit knowledge base wipe ─────────────────────────────────
@@ -174,12 +174,6 @@ EXAMPLE: ctx_purge(confirm: true, scope: "project")`,
       sessionStats.cacheBytesSaved = 0;
       sessionStats.sessionStart = Date.now();
       deleted.push("session stats");
-
-      // Also drop the persisted stats file so external readers see a fresh state
-      try {
-        const statsFile = getStatsFilePath();
-        if (existsSync(statsFile)) unlinkSync(statsFile);
-      } catch { /* best effort */ }
     }
 
     const message = effectiveScope === "session"

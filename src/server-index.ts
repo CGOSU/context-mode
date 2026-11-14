@@ -184,16 +184,15 @@ EXAMPLE: ctx_index(path: "/path/to/large-spec.md", source: "openapi-v2-spec")`,
         });
       }
 
-      // Track the raw bytes being indexed (content or file)
-      if (content) trackIndexed(Buffer.byteLength(content));
-      else if (resolvedPath) {
-        try {
-          const fs = await import("fs");
-          trackIndexed(fs.readFileSync(resolvedPath).byteLength);
-        } catch { /* ignore — file read errors handled by store */ }
-      }
       const store = getStore();
       const result = store.index({ content, path: resolvedPath, source: source ?? resolvedPath, attribution: currentAttribution() });
+      if (content) trackIndexed(Buffer.byteLength(content), source ?? resolvedPath ?? "inline");
+      else if (resolvedPath) {
+        try {
+          const fs = await import("node:fs");
+          trackIndexed(fs.statSync(resolvedPath).size, source ?? resolvedPath);
+        } catch { /* ignore — file stat errors non-fatal */ }
+      }
 
       return trackResponse("ctx_index", {
         content: [

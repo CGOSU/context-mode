@@ -3,7 +3,7 @@ import { createExecutionSource } from "./execution-source.js";
 import { executionResponse } from "./execution-response.js";
 import { resolveResponseBudget } from "./response-budget.js";
 import { coerceBoolean } from "./server-input.js";
-import { resolveExecTimeout, buildExecuteEcho } from "./server-execution-options.js";
+import { buildExecuteEcho } from "./server-execution-options.js";
 import type { ServerToolContext } from "./server.js";
 
 export function registerExecutionTools(context: ServerToolContext): void {
@@ -127,7 +127,7 @@ EXAMPLE: ctx_execute(language: "javascript", code: "const out = require('child_p
     const responseOptions = {
       language, source: createExecutionSource(`execute:${language}`, attribution?.sessionId), attribution,
       echo: buildExecuteEcho(language, code, undefined, clientInfo), intent,
-      timeout: resolveExecTimeout(timeout), maxChars: resolveResponseBudget(maxOutputChars, clientInfo),
+      timeout, maxChars: resolveResponseBudget(maxOutputChars, clientInfo),
     };
 
     try {
@@ -201,10 +201,13 @@ __cm_main().catch(e=>{console.error(e);process.exitCode=1});${background ? '\nse
       const effTimeout = responseOptions.timeout;
       const result = await executor.execute({ language, code: instrumentedCode, timeout: effTimeout, background, cwd });
 
-      // Parse sandbox network metrics from stderr
+      // Parse sandbox network & FS read metrics from stderr
+      let callSandboxedBytes = 0;
       const netMatch = result.stderr?.match(/__CM_NET__:(\d+)/);
       if (netMatch) {
-        sessionStats.bytesSandboxed += parseInt(netMatch[1]);
+        const bytes = parseInt(netMatch[1]);
+        callSandboxedBytes += bytes;
+        sessionStats.bytesSandboxed += bytes;
         // Clean the metric line from stderr
         result.stderr = result.stderr.replace(/\n?__CM_NET__:\d+\n?/g, "");
       }
@@ -212,11 +215,13 @@ __cm_main().catch(e=>{console.error(e);process.exitCode=1});${background ? '\nse
       // Parse sandbox FS read metrics from stderr
       const fsMatch = result.stderr?.match(/__CM_FS__:(\d+)/);
       if (fsMatch) {
-        sessionStats.bytesSandboxed += parseInt(fsMatch[1]);
+        const bytes = parseInt(fsMatch[1]);
+        callSandboxedBytes += bytes;
+        sessionStats.bytesSandboxed += bytes;
         result.stderr = result.stderr.replace(/\n?__CM_FS__:\d+\n?/g, "");
       }
 
-      return trackResponse("ctx_execute", executionResponse(context, result, responseOptions), responseOptions.maxChars);
+      return trackResponse("ctx_execute", executionResponse(context, result, responseOptions), responseOptions.maxChars, callSandboxedBytes || undefined);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       return trackResponse("ctx_execute", executionResponse(context, {
@@ -330,7 +335,7 @@ EXAMPLE: ctx_execute_file(path: "data.csv", language: "javascript", code: "const
     const responseOptions = {
       language, source: createExecutionSource(`file:${path}`, attribution?.sessionId), attribution,
       echo: buildExecuteEcho(language, code, path, clientInfo), intent,
-      timeout: resolveExecTimeout(timeout), maxChars: resolveResponseBudget(maxOutputChars, clientInfo),
+      timeout, maxChars: resolveResponseBudget(maxOutputChars, clientInfo),
     };
 
     try {

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { cleanupExecutionSources, createExecutionSource } from "./execution-source.js";
 import { runPool, type PoolJob } from "./runPool.js";
-import { formatCommandOutput, combineExecOutput, resolveExecTimeout, truncateCommandForEcho } from "./server-execution-options.js";
+import { formatCommandOutput, combineExecOutput, truncateCommandForEcho } from "./server-execution-options.js";
 import { coerceCommandsArray, coerceJsonArray } from "./server-input.js";
 import { formatBatchQueryResults } from "./server-snippets.js";
 import { boundResponse, resolveResponseBudget } from "./response-budget.js";
@@ -320,7 +320,8 @@ EXAMPLE: ctx_batch_execute(
 
       // Full stdout is preserved per-command and indexed into FTS5 (Issue #61, #197).
       // Concurrency>1 switches to a worker pool with per-command timeouts.
-      const effTimeout = resolveExecTimeout(timeout);
+      const effTimeout = timeout;
+      let batchFsBytes = 0;
       const { outputs: perCommandOutputs, timedOut, outcomes } = await runBatchCommands(
         commands,
         {
@@ -328,7 +329,7 @@ EXAMPLE: ctx_batch_execute(
           concurrency,
           nodeOptsPrefix,
           cwd,
-          onFsBytes: (bytes) => { sessionStats.bytesSandboxed += bytes; },
+          onFsBytes: (bytes) => { batchFsBytes += bytes; sessionStats.bytesSandboxed += bytes; },
         },
         executor,
       );
@@ -411,14 +412,15 @@ EXAMPLE: ctx_batch_execute(
           : "",
       ].join("\n");
 
+      const boundedOutput = boundResponse(output, budget);
       return trackResponse("ctx_batch_execute", {
-        content: [{ type: "text" as const, text: boundResponse(output, budget) }],
+        content: [{ type: "text" as const, text: boundedOutput }],
         isError: failed.length > 0,
         structuredContent: { batch: {
           source, status, totalCommands: commands.length, failedCommands: failed.length,
           outcomes: outcomes.slice(0, 50), omittedOutcomes: Math.max(0, outcomes.length - 50),
         } },
-      }, budget);
+      }, budget, batchFsBytes || undefined);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       return trackResponse("ctx_batch_execute", {

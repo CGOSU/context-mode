@@ -5,8 +5,7 @@ import { resolve, dirname, basename, isAbsolute } from "node:path";
 import { ensureWritableStorageDir, resolveContentStorageDir } from "./session/db.js";
 import { ContentStore } from "./store.js";
 import { readToolDenyPatterns, evaluateFilePath } from "./security.js";
-// ── Adapter imports ──────────────────────────────────────
-import { detectPlatform, getAdapter } from "./adapters/detect.js";
+import { PiAdapter } from "./adapters/pi/index.js";
 
 interface ParsedFlags {
   positional: string[];
@@ -90,7 +89,7 @@ function resolveCliProjectDir(projectFlag: string | undefined, fallback: string)
 }
 
 async function openCliContentStore(projectDir: string): Promise<{ store: ContentStore; dbPath: string; contentDir: string }> {
-  const adapter = await getAdapter(detectPlatform().platform);
+  const adapter = new PiAdapter();
   const contentStorage = resolveContentStorageDir(() => adapter.getSessionDir());
   const contentDir = ensureWritableStorageDir(contentStorage);
   const { resolveContentStorePath } = await import("./session/db.js");

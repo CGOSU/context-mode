@@ -1,7 +1,20 @@
 import { readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { relative, resolve, sep } from "node:path";
 
-import { resolveAdapterGlobalSettingsPaths } from "./util/claude-config.js";
+function resolvePiGlobalSettingsPaths(): string[] {
+  const piDirRaw = process.env.PI_CONFIG_DIR || process.env.PI_CODING_AGENT_DIR;
+  const piRoot = piDirRaw && piDirRaw.trim()
+    ? resolve(homedir(), piDirRaw.replace(/^~[/\\]?/, ""))
+    : resolve(homedir(), ".pi");
+  const claudeDirRaw = process.env.CLAUDE_CONFIG_DIR;
+  const claudeRoot = claudeDirRaw && claudeDirRaw.trim()
+    ? resolve(homedir(), claudeDirRaw.replace(/^~[/\\]?/, ""))
+    : resolve(homedir(), ".claude");
+  const piSettings = resolve(piRoot, "settings.json");
+  const claudeSettings = resolve(claudeRoot, "settings.json");
+  return piSettings === claudeSettings ? [piSettings] : [piSettings, claudeSettings];
+}
 
 // ==============================================================================
 // Types
@@ -383,7 +396,7 @@ export function readBashPolicies(
   const globalPaths =
     globalSettingsPath !== undefined
       ? [globalSettingsPath]
-      : resolveAdapterGlobalSettingsPaths();
+      : resolvePiGlobalSettingsPaths();
 
   for (const globalPath of globalPaths) {
     const globalPolicy = readSingleSettings(globalPath);
@@ -479,7 +492,7 @@ export function readToolPermissionPatterns(
   const globalPaths =
     globalSettingsPath !== undefined
       ? [globalSettingsPath]
-      : resolveAdapterGlobalSettingsPaths();
+      : resolvePiGlobalSettingsPaths();
 
   for (const globalPath of globalPaths) {
     const globalGlobs = extractGlobs(globalPath);

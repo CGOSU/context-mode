@@ -415,9 +415,9 @@ function renderNarrative5Section(args: {
     where = `across ${realAdapterCount} AI tools`;
   } else if (multiAdapter && realAdapterCount === 1) {
     const onlyReal = multiAdapter.perAdapter.find((a) => a.isReal);
-    where = `in ${onlyReal ? adapterLabel(onlyReal.name) : "Claude Code"}`;
+    where = `in ${onlyReal ? adapterLabel(onlyReal.name) : "Pi"}`;
   } else {
-    where = "in Claude Code";
+    where = "in Pi";
   }
 
   // ── Opener.
@@ -1167,12 +1167,22 @@ export function formatReport(
   // passes the isReal filter inside getMultiAdapterLifetimeStats.
   const realAdapterCount = multiAdapter?.perAdapter.filter((a) => a.isReal).length ?? 0;
 
-  // ── B3b Slice 3.4: opening tagline — runs in EVERY render path so the
-  // multi-adapter headline appears regardless of which formatReport branch
-  // executes (active session / fresh / per-conversation). Falls back to
-  // "in Claude Code" when only one adapter qualifies as real, matching the
-  // Mert-approved demo wording. Suppressed entirely without multiAdapter
-  // so legacy single-adapter renders stay byte-identical (Slice 3.5).
+  // ── 5-section narrative layout runs first so we don't construct and discard
+  //    the fallback multi-adapter opener above.
+  if (conversation && conversation.events > 0) {
+    const detected = detectLocaleAndTz();
+    const cwd    = opts?.cwd    ?? process.cwd();
+    const now    = opts?.now    ?? Date.now();
+    const locale = opts?.locale ?? detected.locale;
+    const tz     = opts?.tz     ?? detected.tz;
+    lines.push(...renderNarrative5Section({
+      conversation, lifetime, multiAdapter, realBytes,
+      cwd, locale, tz, now, version, latestVersion,
+    }));
+    return lines.join("\n");
+  }
+
+  // ── Opening tagline for legacy / non-narrative fallback paths ──
   if (multiAdapter && realAdapterCount > 0) {
     const totalConvs = multiAdapter.totalSessions || lifetime?.totalSessions || 0;
     const sinceMs = lifetime?.firstEventMs ?? 0;
@@ -1187,41 +1197,11 @@ export function formatReport(
     if (realAdapterCount >= 2) {
       where = `across ${realAdapterCount} AI tools`;
     } else {
-      // Single real adapter — use its marketing label (defaults to Claude Code
-      // if for some reason the only real adapter has no entry in adapterLabels).
       const onlyReal = multiAdapter.perAdapter.find((a) => a.isReal);
-      where = `in ${onlyReal ? adapterLabel(onlyReal.name) : "Claude Code"}`;
+      where = `in ${onlyReal ? adapterLabel(onlyReal.name) : "Pi"}`;
     }
     lines.push(`${daySegment}${convStr}${where}.`);
     lines.push("");
-  }
-
-  // ── 5-section narrative ("kitap gibi") layout — Mert-approved
-  //    screenshot format produced when the MCP handler has wired
-  //    conversation + lifetime + multi-adapter through. Replaces the
-  //    legacy hero/contribution/auto-memory stack with the:
-  //      Opener
-  //      1. Where you are now            (datetime, /compact, timeline)
-  //      2. What this chat captured      (per-category bars)
-  //      3. The receipt — getting wider
-  //      4. For example: what would that cost?
-  //      5. What context-mode learned about how you work
-  //      Footer
-  //    The opener block above (lines 1989-2005) is suppressed because
-  //    renderNarrative5Section emits its own.
-  if (conversation && conversation.events > 0) {
-    // Strip the previous-block opener — narrative renderer emits its own.
-    if (lines.length > 0) lines.length = 0;
-    const detected = detectLocaleAndTz();
-    const cwd    = opts?.cwd    ?? process.cwd();
-    const now    = opts?.now    ?? Date.now();
-    const locale = opts?.locale ?? detected.locale;
-    const tz     = opts?.tz     ?? detected.tz;
-    lines.push(...renderNarrative5Section({
-      conversation, lifetime, multiAdapter, realBytes,
-      cwd, locale, tz, now, version, latestVersion,
-    }));
-    return lines.join("\n");
   }
 
   // ── Compute real savings ──

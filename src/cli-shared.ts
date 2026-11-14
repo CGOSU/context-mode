@@ -6,11 +6,7 @@ import { execFileSync, execSync, execFile as nodeExecFile, type ExecSyncOptions 
 import { readFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import { resolve, dirname } from "node:path";
-import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-// ── Adapter imports ──────────────────────────────────────
-import { detectPlatform } from "./adapters/detect.js";
-import { isInProcessPluginPlatform } from "./adapters/types.js";
 
 // Private 16-LOC copy of browserOpenArgv. Canonical version lives in src/server.ts;
 // duplicated here so the cli bundle does not pull server.ts top-level boot side effects.
@@ -119,25 +115,7 @@ function defaultPluginRoot(): string {
   return __dirname;
 }
 
-// Opencode/Kilocode install plugins from npm into a per-package cache folder.
-// Layout (changed silently in late 2024 — see PR #376 / KiloCode#9503):
-//   POSIX  : ~/.cache/<platform>/packages/context-mode@latest/node_modules/context-mode
-//   Windows: %LOCALAPPDATA%\<platform>\packages\context-mode@latest\node_modules\context-mode
-function cachePluginRoot(platform: string): string {
-  const subPath = ["packages", "context-mode@latest", "node_modules", "context-mode"];
-  if (process.platform === "win32") {
-    const localApp = process.env.LOCALAPPDATA;
-    if (localApp) return resolve(localApp, platform, ...subPath);
-    return resolve(homedir(), "AppData", "Local", platform, ...subPath);
-  }
-  return resolve(homedir(), ".cache", platform, ...subPath);
-}
-
 function getPluginRoot(): string {
-  const platform = detectPlatform().platform;
-  if (isInProcessPluginPlatform(platform)) {
-    return cachePluginRoot(platform);
-  }
   return defaultPluginRoot();
 }
 

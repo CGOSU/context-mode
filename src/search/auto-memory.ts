@@ -7,9 +7,17 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, isAbsolute } from "node:path";
-import { resolveClaudeConfigDir } from "../util/claude-config.js";
+import { homedir } from "node:os";
+import { join, isAbsolute, resolve } from "node:path";
 import { hashProjectDirCanonical } from "../session/db.js";
+
+function resolvePiConfigDirDefault(): string {
+  const raw = process.env.PI_CONFIG_DIR || process.env.PI_CODING_AGENT_DIR;
+  if (raw && raw.trim() !== "") {
+    return raw.startsWith("~") ? resolve(homedir(), raw.replace(/^~[/\\]?/, "")) : resolve(raw);
+  }
+  return resolve(homedir(), ".pi");
+}
 
 const DEBUG = process.env.DEBUG?.includes("context-mode");
 
@@ -63,15 +71,10 @@ export function searchAutoMemory(
 ): AutoMemoryResult[] {
   const results: AutoMemoryResult[] = [];
 
-  // Resolve conventions — adapter wins over explicit configDir, which wins
-  // over the historical Claude defaults.
-  const instructionFiles = adapter?.getInstructionFiles() ?? ["CLAUDE.md"];
+  const instructionFiles = adapter?.getInstructionFiles() ?? ["AGENTS.md"];
   const adapterConfigDir = adapter?.getConfigDir();
-  // Issue #460 round-3: legacy fallback honors $CLAUDE_CONFIG_DIR via the
-  // canonical util so callers without an adapter still respect relocated
-  // CC config trees (and empty/whitespace env doesn't poison the path).
   const adapterRelative = adapterConfigDir ? resolveAgainst(projectDir, adapterConfigDir) : null;
-  const effectiveConfigDir = adapterRelative ?? configDir ?? resolveClaudeConfigDir();
+  const effectiveConfigDir = adapterRelative ?? configDir ?? resolvePiConfigDirDefault();
   // Issue #663: scope memory dir by projectDir so parallel projects can't
   // read each other's auto-memory. Adapter-aware path delegates the
   // scoping to the adapter; legacy adapterless fallback applies the same

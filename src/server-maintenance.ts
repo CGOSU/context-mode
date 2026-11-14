@@ -3,10 +3,7 @@ import { join, dirname, resolve } from "node:path";
 import { z } from "zod";
 import { PolyglotExecutor } from "./executor.js";
 import { hasBunRuntime } from "./runtime.js";
-import { describeStorageDirectorySource, resolveContentStorageDir, resolveSessionStorageDir, resolveStatsStorageDir } from "./session/db.js";
-import { buildNodeCommand, type PlatformId, isInProcessPluginPlatform } from "./adapters/types.js";
-import { detectPlatform } from "./adapters/detect.js";
-import { getHookScriptPaths } from "./util/hook-config.js";
+import { describeStorageDirectorySource, resolveContentStorageDir, resolveSessionStorageDir } from "./session/db.js";
 import { loadDatabase } from "./db-base.js";
 import { killProcessOnPort, openBrowserSync } from "./server-browser.js";
 import type { ServerToolContext } from "./server.js";
@@ -19,8 +16,13 @@ import type { ServerToolContext } from "./server.js";
 // cross-platform helper (openBrowserSync) used elsewhere.
 const INSIGHT_URL = "https://context-mode.com/insight";
 
+function formatNodeCommand(scriptPath: string, nodeBin?: string): string {
+  const quote = (s: string) => (/[\s"'()]/.test(s) ? JSON.stringify(s) : s);
+  return `${quote(nodeBin || "node")} ${quote(scriptPath)}`;
+}
+
 export function registerMaintenanceTools(context: ServerToolContext): void {
-  const { server, getRuntimeAwarePackageRoot, available, getDefaultSessionDir, getDiagnosticAdapter, VERSION, trackResponse, runtimes, getSessionDir } = context;
+  const { server, _detectedAdapter, getPackageRoot, available, getDefaultSessionDir, VERSION, trackResponse, runtimes, getSessionDir } = context;
 
 
 // ── ctx-doctor: diagnostics (server-side) ─────────────────────────────────
@@ -51,16 +53,7 @@ server.registerTool(
     // safe across all MCP renderers — using plain-text status prefixes
     // (`[OK]` / `[FAIL]` / `[WARN]`) instead.
     const lines: string[] = ["context-mode doctor", ""];
-    let currentPlatform: PlatformId | undefined;
-    try {
-      currentPlatform = detectPlatform(server.server.getClientVersion() ?? undefined).platform;
-    } catch {
-      currentPlatform = detectPlatform().platform;
-    }
-    // __pkg_dir is build/ for tsc, plugin root for bundle — resolve to plugin root.
-    // Codex is special: when plugin-manager runtime root differs from the
-    // current package root, diagnose the root Codex will actually execute.
-    const pluginRoot = getRuntimeAwarePackageRoot(currentPlatform);
+    const pluginRoot = getPackageRoot();
 
     // Runtimes
     const total = 11;
@@ -76,10 +69,8 @@ server.registerTool(
 
     const sessionStorage = resolveSessionStorageDir(getDefaultSessionDir);
     const contentStorage = resolveContentStorageDir(getDefaultSessionDir);
-    const statsStorage = resolveStatsStorageDir(getDefaultSessionDir);
     lines.push(`[OK] Storage sessions: ${sessionStorage.path} (${describeStorageDirectorySource(sessionStorage)})`);
     lines.push(`[OK] Storage content: ${contentStorage.path} (${describeStorageDirectorySource(contentStorage)})`);
-    lines.push(`[OK] Storage stats: ${statsStorage.path} (${describeStorageDirectorySource(statsStorage)})`);
 
     // Server test — cleanup executor to prevent resource leaks (#247)
     {
@@ -120,29 +111,11 @@ server.registerTool(
       }
     }
 
-    // Hooks
-    const diagnosticAdapter = await getDiagnosticAdapter();
-    if (diagnosticAdapter) {
-      for (const result of diagnosticAdapter.validateHooks(pluginRoot)) {
-        const prefix = result.status === "pass" ? "[OK]" : result.status === "warn" ? "[WARN]" : "[FAIL]";
-        const fix = result.fix ? ` — fix: ${result.fix}` : "";
-        lines.push(`${prefix} ${result.check}: ${result.message}${fix}`);
-      }
-
-      const hookScriptPaths = getHookScriptPaths(diagnosticAdapter, pluginRoot);
-      if (hookScriptPaths.length === 0) {
-        lines.push("[OK] Hook scripts: no direct .mjs script paths to verify");
-      }
-      for (const scriptPath of hookScriptPaths) {
-        const hookPath = resolve(pluginRoot, scriptPath);
-        if (existsSync(hookPath)) {
-          lines.push(`[OK] Hook script: PASS — ${hookPath}`);
-        } else {
-          lines.push(`[FAIL] Hook script: FAIL — not found at ${hookPath}`);
-        }
-      }
-    } else {
-      lines.push("[WARN] Hooks: adapter detection unavailable");
+    // Pi extension / hook bridge diagnostics
+    for (const result of _detectedAdapter.validateHooks(pluginRoot)) {
+      const prefix = result.status === "pass" ? "[OK]" : result.status === "warn" ? "[WARN]" : "[FAIL]";
+      const fix = result.fix ? ` — fix: ${result.fix}` : "";
+      lines.push(`${prefix} ${result.check}: ${result.message}${fix}`);
     }
 
     // Version
@@ -176,68 +149,32 @@ server.registerTool(
     inputSchema: z.object({}),
   },
   async () => {
-    // Issue #542 — thread MCP clientInfo into the spawned upgrade
-    // process. detectPlatform() runs IN-PROCESS here (no spawn boundary)
-    // so clientInfo from the MCP handshake is the highest-confidence
-    // signal available. We forward the resolved PlatformId as a
-    // --platform flag (cross-shell safe on POSIX, Git Bash, PowerShell,
-    // and cmd.exe — unlike env-var prefixes). If detection fails we
-    // skip the flag and let upgrade()'s own detectPlatform() fall back.
-    let platformFlag = "";
-    let nodeOpts: { platform: string; jsRuntime: string } | undefined =
-      undefined;
-    let platformId: PlatformId | undefined;
-    try {
-      const clientInfo = server.server.getClientVersion();
-      const signal = detectPlatform(clientInfo ?? undefined);
-      platformId = signal.platform;
-      platformFlag = ` --platform ${signal.platform}`;
-      nodeOpts = isInProcessPluginPlatform(signal.platform) && runtimes.javascript
-        ? { platform: signal.platform, jsRuntime: runtimes.javascript }
-        : undefined;
-    } catch {
-      try { platformId = detectPlatform().platform; } catch { /* best effort — fall back to upgrade()'s own detect */ }
-    }
-
-    // __pkg_dir is build/ for tsc, plugin root for bundle — resolve to plugin root.
-    // Only Codex may replace it with the plugin-manager runtime root; other
-    // adapters can coexist with Codex on the same machine.
-    const pluginRoot = getRuntimeAwarePackageRoot(platformId);
+    const pluginRoot = getPackageRoot();
     const bundlePath = resolve(pluginRoot, "cli.bundle.mjs");
     const fallbackPath = resolve(pluginRoot, "build", "cli.js");
+    const nodeBin = runtimes.javascript || undefined;
 
-    // Insight pivoted to the hosted dashboard (context-mode.com/insight), so
-    // ctx_insight no longer builds a local cache. On upgrade, sweep the legacy
-    // insight-cache and stop any stale local dashboard left from old versions.
+    // Sweep any legacy insight-cache directory left over from old versions.
     try {
       const sessDir = getSessionDir();
       const insightCacheDir = join(dirname(sessDir), "insight-cache");
       if (existsSync(insightCacheDir)) {
-        // Kill any running insight server first via the shared helper —
-        // this is locale-independent on Windows (PR #469) and isolates per-pid
-        // failures. We ignore the structured result: cache cleanup is
-        // best-effort and must never block ctx_upgrade.
         killProcessOnPort(4747);
         rmSync(insightCacheDir, { recursive: true, force: true });
       }
     } catch { /* best effort — don't block upgrade */ }
 
-
     let cmd: string;
 
     if (existsSync(bundlePath)) {
-      cmd = `${buildNodeCommand(bundlePath, nodeOpts)} upgrade${platformFlag}`;
+      cmd = `${formatNodeCommand(bundlePath, nodeBin)} upgrade --platform pi`;
     } else if (existsSync(fallbackPath)) {
-      cmd = `${buildNodeCommand(fallbackPath, nodeOpts)} upgrade${platformFlag}`;
+      cmd = `${formatNodeCommand(fallbackPath, nodeBin)} upgrade --platform pi`;
     } else {
-      // Inline fallback: neither CLI file exists (e.g. marketplace installs).
-      // Generate a self-contained node -e script that performs the upgrade.
       const repoUrl = "https://github.com/mksglu/context-mode.git";
-      // Write inline script to a temp .mjs file — avoids quote-escaping issues
-      // across cmd.exe, PowerShell, and bash (node -e '...' breaks on Windows).
       const scriptLines = [
         `import{execFileSync}from"node:child_process";`,
-        `import{cpSync,rmSync,existsSync,mkdtempSync,readFileSync,writeFileSync,lstatSync}from"node:fs";`,
+        `import{cpSync,rmSync,existsSync,mkdtempSync,readFileSync,lstatSync}from"node:fs";`,
         `import{join,resolve,sep}from"node:path";`,
         `import{tmpdir}from"node:os";`,
         `const P=${JSON.stringify(pluginRoot)};`,
@@ -247,26 +184,13 @@ server.registerTool(
         `execFileSync("git",["clone","--depth","1","${repoUrl}",T],{stdio:"inherit"});`,
         `console.log("- [x] Cloned latest source");`,
         `execFileSync(process.platform==="win32"?"npm.cmd":"npm",["install"],{cwd:T,stdio:"inherit",shell:process.platform==="win32"});`,
-        `execFileSync(process.platform==="win32"?"npm.cmd":"npm",["run","build"],{cwd:T,stdio:"inherit",shell:process.platform==="win32"});`,
+        `execFileSync(process.platform==="win32"?"npm.cmd":"npm",["run","build:pi"],{cwd:T,stdio:"inherit",shell:process.platform==="win32"});`,
         `console.log("- [x] Built from source");`,
         `const pkg=JSON.parse(readFileSync(join(T,"package.json"),"utf8"));`,
         `const items=[...(Array.isArray(pkg.files)?pkg.files:[]),"src","package.json"];`,
-        // Supply-chain containment on items[]. Mirror the cli.ts upgrade()
-        // guard: a compromised upstream package.json with files:["../etc"]
-        // would otherwise let path.join follow ".." out of pluginRoot.
-        // path.resolve normalizes "..", so the lexical startsWith catches
-        // both relative-".." traversal and absolute-path bypass. Plus a
-        // symlink filter so a committed symlink inside the clone can't
-        // plant itself in pluginRoot (cpSync default preserves source
-        // symlinks; a planted symlink in pluginRoot/src then redirects
-        // every subsequent load through to an attacker target).
         `const PW=resolve(P)+sep;const TW=resolve(T)+sep;`,
         `const noSymlink=(src)=>{try{return !lstatSync(src).isSymbolicLink()}catch{return false}};`,
         `for(const item of items){const from=resolve(T,item);const to=resolve(P,item);if(!(to+sep).startsWith(PW))continue;if(!(from+sep).startsWith(TW))continue;if(!noSymlink(from))continue;if(existsSync(from)){rmSync(to,{recursive:true,force:true});cpSync(from,to,{recursive:true,force:true,filter:noSymlink});}}`,
-        // Issue #609: do NOT write .mcp.json into the cache dir. Claude Code reads
-        // .claude-plugin/plugin.json.mcpServers as the canonical MCP source — the
-        // per-version .mcp.json file is a stale-write vector. Same architectural
-        // fix as the cli.ts upgrade() path; both writers were the only producers.
         `console.log("- [x] Copied package files");`,
         `execFileSync(process.platform==="win32"?"npm.cmd":"npm",["install","--production"],{cwd:P,stdio:"inherit",shell:process.platform==="win32"});`,
         `console.log("- [x] Installed production dependencies");`,
@@ -279,11 +203,10 @@ server.registerTool(
         `}`,
       ].join("\n");
 
-      // Server writes the temp script file — avoids shell quoting issues entirely
       const tmpScript = resolve(pluginRoot, ".ctx-upgrade-inline.mjs");
       const { writeFileSync: writeTmp } = await import("node:fs");
       writeTmp(tmpScript, scriptLines);
-      cmd = buildNodeCommand(tmpScript, nodeOpts);
+      cmd = formatNodeCommand(tmpScript, nodeBin);
     }
 
     const text = [

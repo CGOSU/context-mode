@@ -1,16 +1,13 @@
-import { detectPlatform } from "./adapters/detect.js";
-
 /** Character budgets bound previews, never the indexed evidence or exit status. */
 export function resolveResponseBudget(
   requested: number | undefined,
-  clientInfo?: { name: string; version?: string },
-  defaultOther = 40 * 1024,
+  _clientInfo?: { name: string; version?: string },
+  defaultBudget = 12_000,
 ): number {
   if (requested !== undefined && Number.isFinite(requested)) {
     return Math.max(1000, Math.min(80 * 1024, Math.floor(requested)));
   }
-  return clientInfo?.name === "pi-coding-agent-context-mode-bridge" ||
-    detectPlatform(clientInfo).platform === "pi" ? 12_000 : defaultOther;
+  return defaultBudget;
 }
 
 export function boundResponse(

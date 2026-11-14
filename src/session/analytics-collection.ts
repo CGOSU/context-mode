@@ -2,11 +2,18 @@
 
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { loadDatabase as loadDatabaseImpl } from "../db-base.js";
 import { ensureSessionEventsSchema } from "./db.js";
-import { resolveClaudeConfigDir } from "../util/claude-config.js";
 import { categoryLabels, categoryHints } from "./analytics-labels.js";
+
+function resolvePiConfigDir(): string {
+  const raw = process.env.PI_CONFIG_DIR || process.env.PI_CODING_AGENT_DIR || process.env.CLAUDE_CONFIG_DIR;
+  if (raw && raw.trim() !== "") {
+    return raw.startsWith("~") ? resolve(homedir(), raw.replace(/^~[/\\]?/, "")) : resolve(raw);
+  }
+  return resolve(homedir(), ".pi");
+}
 import type {
   DatabaseAdapter,
   ContextSavings,
@@ -407,11 +414,11 @@ export function getLifetimeStats(opts?: {
   // stats aggregation tracks $CLAUDE_CONFIG_DIR instead of the literal
   // ~/.claude tree. Otherwise users who relocate config see "no sessions"
   // even though the SessionDB sidecars exist under the override.
-  const claudeRoot = resolveClaudeConfigDir();
+  const root = resolvePiConfigDir();
   const sessionsDir = opts?.sessionsDir
-    ?? join(claudeRoot, "context-mode", "sessions");
+    ?? join(root, "context-mode", "sessions");
   const memoryRoot = opts?.memoryRoot
-    ?? join(claudeRoot, "projects");
+    ?? join(root, "projects");
 
   let totalEvents = 0;
   let totalSessions = 0;

@@ -1,33 +1,24 @@
 #!/usr/bin/env node
 /**
- * context-mode CLI
+ * context-mode CLI (Pi-focused)
  *
  * Usage:
- *   context-mode                              → Start MCP server (stdio)
- *   context-mode doctor                       → Diagnose runtime issues, hooks, FTS5, version
- *   context-mode upgrade                      → Fix hooks, permissions, and settings
- *   context-mode hook <platform> <event>      → Dispatch a hook script (used by platform hook configs)
- *   CONTEXT_MODE_DIR=/abs/path context-mode   → Override sessions/content storage root
- *     Empty/whitespace is ignored; non-empty values must be absolute.
- *
- * Platform auto-detection: CLI detects which platform is running
- * (Claude Code, Gemini CLI, OpenCode, etc.) and uses the appropriate adapter.
+ *   context-mode                         → Start MCP server (stdio)
+ *   context-mode index <path>            → Index a file or directory into FTS5
+ *   context-mode search <query...>       → Search the project's FTS5 knowledge base
+ *   context-mode doctor                  → Diagnose runtime issues, FTS5, Pi integration
+ *   context-mode upgrade                 → Upgrade local checkout/extension
+ *   context-mode insight                 → Open hosted Insight dashboard
  */
 
 import * as p from "@clack/prompts";
 import color from "picocolors";
 
-import { hookDispatch } from "./cli-hooks.js";
 import { indexCommand, searchCommand } from "./cli-knowledge.js";
 import { doctor } from "./cli-doctor.js";
 import { insight } from "./cli-insight.js";
 import { upgrade } from "./cli-upgrade.js";
-import { statuslineForward } from "./cli-statusline.js";
 export { toUnixPath, npmExecFile, npmExec, openInBrowser, type ExecFileFn } from "./cli-shared.js";
-
-/* -------------------------------------------------------
- * Entry point
- * ------------------------------------------------------- */
 
 const args = process.argv.slice(2);
 
@@ -37,10 +28,9 @@ function printHelp(): void {
     "  context-mode                         Start MCP server (stdio)",
     "  context-mode index <path>            Index a file or directory into the FTS5 knowledge base",
     "  context-mode search <query...>       Search the current project's FTS5 knowledge base",
-    "  context-mode doctor                  Diagnose runtime issues, hooks, FTS5, version",
-    "  context-mode upgrade                 Fix hooks, permissions, and settings",
-    "  context-mode hook <platform> <event> Dispatch a configured hook script",
-    "  context-mode statusline              Print Claude Code status line",
+    "  context-mode doctor                  Diagnose runtime issues, FTS5, Pi extension",
+    "  context-mode upgrade                 Upgrade local package and verify SQLite/runtimes",
+    "  context-mode insight                 Open Insight dashboard in browser",
     "",
     "Index options:",
     "  --source <label>                     Source label (default: project:<directory-name> or path)",
@@ -73,29 +63,13 @@ if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
 } else if (args[0] === "doctor") {
   doctor().then((code) => process.exit(code));
 } else if (args[0] === "upgrade") {
-  // Issue #542 — accept --platform <id> from the ctx_upgrade MCP handler,
-  // which forwards the live MCP clientInfo's resolved PlatformId. The flag
-  // wins over upgrade()'s own detectPlatform() heuristic chain so an
-  // ambiguous config-dir collision (e.g. ~/.cursor + ~/.pi both present)
-  // can never misroute the upgrade.
-  const platformFlagIdx = args.indexOf("--platform");
-  const platformArg =
-    platformFlagIdx >= 0 && args[platformFlagIdx + 1]
-      ? args[platformFlagIdx + 1]
-      : undefined;
-  upgrade(platformArg ? { platform: platformArg } : undefined).catch((err: unknown) => {
+  upgrade().catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     p.log.error(color.red(message));
     process.exit(1);
   });
-} else if (args[0] === "hook") {
-  hookDispatch(args[1], args[2]);
 } else if (args[0] === "insight") {
   insight();
-} else if (args[0] === "statusline") {
-  // Status line implementation lives in bin/statusline.mjs to keep it
-  // dependency-free and fast. Forward stdin and exit with its result.
-  statuslineForward();
 } else {
   // Default: start MCP server
   import("./server.js");

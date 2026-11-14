@@ -1,6 +1,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { JS_RUNTIMES } from "./adapters/runtime-constants.js";
+
+const JS_RUNTIMES: ReadonlySet<string> = new Set(["node", "bun", "deno"]);
 
 /**
  * Allowlist for SHELL env override. Only POSIX shells + Windows shells permit

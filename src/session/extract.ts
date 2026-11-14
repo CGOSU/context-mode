@@ -13,18 +13,11 @@ export { resetErrorResolutionState, resetIterationLoopState } from "./extract-to
 export { extractUserEvents, extractUserPromptFeatures, type PromptFeatures } from "./extract-user.js";
 export {
   parsePiUsage,
-  parseOpenclawUsage,
-  parseOpencodeUsage,
   buildAgentUsageEvent,
-  parseGeminiUsage,
   extractTranscriptUsage,
   extractTranscriptUsageSince,
   type AgentUsageCounts,
 } from "./extract-usage.js";
-
-// Adapter-owned wire readers remain reachable from the shared hook bundle.
-export { parseKimiUsage, extractKimiUsageSince } from "../adapters/kimi/usage.js";
-export { parseQwenUsage, extractQwenUsageSince } from "../adapters/qwen-code/usage.js";
 
 /**
  * Issue #4 (new PRD) — SessionStart settings + MCP servers snapshot.

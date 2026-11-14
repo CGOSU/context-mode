@@ -16,10 +16,6 @@
 // Hook paradigm
 // ─────────────────────────────────────────────────────────
 
-// Compatibility exports: implementations live outside the adapter contracts.
-export { buildNodeCommand, buildHookRuntimeCommand, parseNodeCommand } from "./commands.js";
-export { JS_RUNTIMES, IN_PROCESS_PLUGIN_PLATFORMS, isInProcessPluginPlatform } from "./runtime-constants.js";
-
 export type HookParadigm = "json-stdio" | "ts-plugin" | "mcp-only";
 
 // ─────────────────────────────────────────────────────────

@@ -55,6 +55,7 @@ export function emitSandboxExecuteEvent(opts: {
   sessionDbPath: string;
   toolName: string;
   bytesReturned: number;
+  bytesAvoided?: number;
 }): void {
   withLatestSession(opts.sessionDbPath, (sdb, sid) => {
     sdb.insertEvent(
@@ -70,7 +71,7 @@ export function emitSandboxExecuteEvent(opts: {
       },
       "ctx-server",
       undefined,
-      { bytesReturned: opts.bytesReturned },
+      { bytesReturned: opts.bytesReturned, bytesAvoided: opts.bytesAvoided },
     );
   });
 }

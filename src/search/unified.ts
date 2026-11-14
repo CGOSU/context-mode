@@ -54,6 +54,8 @@ export interface SearchAllSourcesOpts {
    *                   plus legacy `session_id=''` chunks (public surface).
    */
   projectScope?: string | null;
+  /** Pre-resolved session-id allow-set so batched query loops do not re-query SessionDB. */
+  sessionIdAllowSet?: Set<string>;
 }
 
 // ─────────────────────────────────────────────────────────
@@ -91,8 +93,8 @@ export function searchAllSources(opts: SearchAllSourcesOpts): UnifiedSearchResul
   // ContentStore call. `projectScope === null` means cross-project recall —
   // an explicit "no filter" choice surfaced by the ctx_search caller — and
   // `undefined` falls back to today's unfiltered behaviour.
-  let sessionIdAllowSet: Set<string> | undefined;
-  if (typeof projectScope === "string" && sessionDB) {
+  let sessionIdAllowSet: Set<string> | undefined = opts.sessionIdAllowSet;
+  if (sessionIdAllowSet === undefined && typeof projectScope === "string" && sessionDB) {
     try {
       sessionIdAllowSet = new Set(sessionDB.getSessionIdsForProject(projectScope));
     } catch (e) {

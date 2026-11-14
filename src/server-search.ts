@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { resolveSessionDbPath, SessionDB } from "./session/db.js";
 import { searchAllSources } from "./search/unified.js";
 import { buildCtxSearchInputSchema, CTX_SEARCH_SHARED_MODE, resolveProjectScope } from "./search/ctx-search-schema.js";
 import { FloodGuard } from "./search/flood-guard.js";
-import { resolveClaudeConfigDir } from "./util/claude-config.js";
 import { extractSnippet } from "./server-snippets.js";
 import { boundResponse, resolveResponseBudget } from "./response-budget.js";
 import type { ServerToolContext } from "./server.js";
@@ -207,18 +208,16 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
         } catch { /* SessionDB unavailable — search ContentStore + auto-memory only */ }
       }
 
-      // Resolve the session-id allow-set once for the relevance-mode path —
-      // searchAllSources resolves its own copy for timeline mode. Empty set
-      // is preserved (means "no events for this project"), which surfaces
-      // only legacy `session_id=''` chunks via the post-filter.
-      let relevanceAllowSet: Set<string> | undefined;
+      // Resolve the session-id allow-set ONCE before the query loop and pass it
+      // into both timeline (`searchAllSources`) and relevance (`search`) paths.
+      let projectSessionAllowSet: Set<string> | undefined;
       if (typeof projectScope === "string" && timelineDB) {
         try {
-          relevanceAllowSet = new Set(timelineDB.getSessionIdsForProject(projectScope));
+          projectSessionAllowSet = new Set(timelineDB.getSessionIdsForProject(projectScope));
         } catch { /* best-effort */ }
       }
 
-      const configDir = context._detectedAdapter?.getConfigDir() ?? resolveClaudeConfigDir();
+      const configDir = context._detectedAdapter?.getConfigDir() ?? join(homedir(), ".pi");
 
       try {
         store.withSearchBatch((search) => {
@@ -243,6 +242,7 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
                 configDir,
                 adapter: context._detectedAdapter ?? undefined,
                 projectScope,
+                sessionIdAllowSet: projectSessionAllowSet,
               });
             } else {
               results = search(
@@ -251,7 +251,7 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
                 source,
                 contentType,
                 "like",
-                relevanceAllowSet,
+                projectSessionAllowSet,
               );
             }
 
@@ -314,8 +314,9 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
         });
       }
 
+      const boundedOutput = boundResponse(output, MAX_TOTAL);
       return trackResponse("ctx_search", {
-        content: [{ type: "text" as const, text: boundResponse(output, MAX_TOTAL) }],
+        content: [{ type: "text" as const, text: boundedOutput }],
       }, MAX_TOTAL);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
