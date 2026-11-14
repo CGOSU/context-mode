@@ -1023,6 +1023,8 @@ Full configs: [`configs/kiro/mcp.json`](configs/kiro/mcp.json) | [`configs/kiro/
 
    The extension starts its bundled MCP server and registers the `ctx_*` tools itself. Do **not** also add `context-mode` to Pi's `mcp.json`, or load the same checkout as a local package alongside the installed package; either creates a second registration path.
 
+**Updates:** Version notices compare the running package's declared version with the latest npm release; they do not attempt an automatic upgrade or indicate an installation failure. Run `pi list` to find the original package source, then `pi update <source>` (for example, `pi update npm:context-mode` for the npm package). Keep the original Git source when using a fork. For a local checkout, update or merge the desired source changes and install dependencies before running `npm run build`; building alone does not download a new version. Fully exit and restart Pi after updating. A fork with an independent version number may continue to show the npm release notice.
+
 **Verify:** In a Pi session, type `ctx stats`. Context-mode tools should appear and respond.
 
 **Pi output:** `ctx_execute` and `ctx_execute_file` omit the submitted code because Pi already displays tool arguments. Execution, search, and batch previews default to 12,000 characters; `maxOutputChars` requests a smaller or larger bounded preview. Execution output omitted from a preview is indexed under a unique session/execution source, with an explicit warning if storage fails. Copy the returned `source` into `ctx_search` for follow-up. Nonzero exits and stopped timeouts are failures even when stdout exists; detached background processes are still running, not verified successful.
