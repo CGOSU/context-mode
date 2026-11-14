@@ -38,7 +38,7 @@ import {
 } from "../../src/server.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const mcpEntry = resolve(__dirname, "..", "..", "start.mjs");
+const mcpEntry = resolve(__dirname, "..", "..", "server.bundle.mjs");
 
 interface MockResult { stdout: string; stderr?: string; timedOut?: boolean; }
 
@@ -196,8 +196,8 @@ describe("issue #717 — ctx_execute echoes the language + code it ran", () => {
     rmSync(projectDir, { recursive: true, force: true });
   });
 
-  test("success path: response carries fenced ```javascript block with the exact code, before stdout", async () => {
-    const proc = spawnServer({ CLAUDE_PROJECT_DIR: projectDir });
+  test("success path: omits submitted code fence and preserves stdout", async () => {
+    const proc = spawnServer({ PI_PROJECT_DIR: projectDir });
     try {
       await initServer(proc);
       const marker = `EXEC-MARKER-${Math.random().toString(36).slice(2)}`;
@@ -209,13 +209,9 @@ describe("issue #717 — ctx_execute echoes the language + code it ran", () => {
       expect(resp?.error).toBeUndefined();
       expect(resp?.result?.isError ?? false).toBe(false);
       const text = resp?.result?.content?.[0]?.text ?? "";
-      // The fenced code block must appear and carry the exact source
-      expect(text).toContain("```javascript");
-      expect(text).toContain(code);
-      // Stdout content still arrives
+      expect(text).not.toContain("```javascript");
+      expect(text).not.toContain(code);
       expect(text).toContain(marker);
-      // Code echo MUST precede the stdout marker
-      expect(text.indexOf("```javascript")).toBeLessThan(text.indexOf(marker));
     } finally {
       try { proc.kill("SIGTERM"); } catch { /* best effort */ }
     }
@@ -386,8 +382,8 @@ describe("issue #717 — ctx_execute_file echoes the path + code it ran", () => 
     rmSync(projectDir, { recursive: true, force: true });
   });
 
-  test("success path: response carries `path=<file>` + fenced code block before stdout", async () => {
-    const proc = spawnServer({ CLAUDE_PROJECT_DIR: projectDir });
+  test("success path: response carries `path=<file>` before stdout without echoing submitted code", async () => {
+    const proc = spawnServer({ PI_PROJECT_DIR: projectDir });
     try {
       await initServer(proc);
       const marker = `FILE-MARKER-${Math.random().toString(36).slice(2)}`;
@@ -399,14 +395,11 @@ describe("issue #717 — ctx_execute_file echoes the path + code it ran", () => 
       expect(resp?.error).toBeUndefined();
       expect(resp?.result?.isError ?? false).toBe(false);
       const text = resp?.result?.content?.[0]?.text ?? "";
-      // Path attribution present
       expect(text).toMatch(/path=.*sample\.txt/);
-      // Fenced code block carrying exact source
-      expect(text).toContain("```javascript");
-      expect(text).toContain(code);
-      // Stdout still arrives, AFTER the echo
+      expect(text).not.toContain("```javascript");
+      expect(text).not.toContain(code);
       expect(text).toContain(marker);
-      expect(text.indexOf("```javascript")).toBeLessThan(text.indexOf(marker));
+      expect(text.indexOf("path=")).toBeLessThan(text.indexOf(marker));
     } finally {
       try { proc.kill("SIGTERM"); } catch { /* best effort */ }
     }

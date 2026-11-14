@@ -22,20 +22,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("prose-style policy (#482)", () => {
   const serverSrc = readServerSource();
-  const routingBlock = readFileSync(
-    resolve(__dirname, "../../hooks/routing-block.mjs"),
-    "utf-8",
-  );
 
   test("no caveman/terse directive lands in any MCP tool description", () => {
     expect(serverSrc).not.toMatch(/terse like caveman/i);
     expect(serverSrc).not.toMatch(/only fluff die/i);
-  });
-
-  test("routing-block has no <communication_style> or <response_format> blocks", () => {
-    expect(routingBlock).not.toMatch(/<communication_style>/);
-    expect(routingBlock).not.toMatch(/<response_format>/);
-    expect(routingBlock).not.toMatch(/terse like caveman/i);
   });
 
   test("README does not advertise an Output Compression pillar", () => {
@@ -47,7 +37,7 @@ describe("prose-style policy (#482)", () => {
     expect(readme).not.toMatch(/terse like caveman/i);
   });
 
-  test("committed bundles (cli/server/hooks) carry no caveman strings", () => {
+  test("committed bundles (cli/server/pi) carry no caveman strings", () => {
     // Defense-in-depth: src/* is stripped, but the npm-shipped bundles are
     // built artifacts that could lag if a future release rebuilds from a
     // dirty tree. Lock the deletion to the actually-published files too
@@ -55,9 +45,7 @@ describe("prose-style policy (#482)", () => {
     const bundlePaths = [
       "../../server.bundle.mjs",
       "../../cli.bundle.mjs",
-      "../../hooks/session-extract.bundle.mjs",
-      "../../hooks/session-snapshot.bundle.mjs",
-      "../../hooks/session-db.bundle.mjs",
+      "../../build/adapters/pi/extension.js",
     ];
     for (const rel of bundlePaths) {
       const p = resolve(__dirname, rel);

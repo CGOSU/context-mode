@@ -43,7 +43,6 @@ describe("ctx_doctor — resource cleanup regression (#247)", () => {
     const text = call!.result?.content?.[0]?.text ?? "";
     expect(text).toContain("Storage sessions:");
     expect(text).toContain("Storage content:");
-    expect(text).toContain("Storage stats:");
     expect(text).toContain("(default; ignored empty CONTEXT_MODE_DIR)");
   }, 30_000);
 
@@ -59,7 +58,6 @@ describe("ctx_doctor — resource cleanup regression (#247)", () => {
     const text = call!.result?.content?.[0]?.text ?? "";
     expect(text).toContain(`Storage sessions: ${join(storageRoot, "sessions")} (via CONTEXT_MODE_DIR)`);
     expect(text).toContain(`Storage content: ${join(storageRoot, "content")} (via CONTEXT_MODE_DIR)`);
-    expect(text).toContain(`Storage stats: ${join(storageRoot, "sessions")} (via CONTEXT_MODE_DIR)`);
   }, 30_000);
 
   test("three concurrent ctx_doctor calls all succeed without crashing the server", async () => {
@@ -107,29 +105,4 @@ describe("ctx_doctor — renderer-safe output (Z.ai compat)", () => {
     // Header is plain text, no markdown
     expect(text).toMatch(/^context-mode doctor/m);
   }, 30_000);
-});
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Pre-detection session dir (race-condition fix)
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// Before the MCP `initialize` handshake completes, `_detectedAdapter` is null.
-// Tools called in that window must still resolve a platform-correct sessions
-// dir instead of falling back to hardcoded `~/.claude/context-mode/sessions/`.
-//
-// `getSessionDirSegments` is a sync, env-free map from PlatformId → segments
-// (no adapter instantiation). `getSessionDir` calls `detectPlatform()` (sync,
-// env-var-based) and feeds the result into the map. Falls back to `.claude`
-// only if the map returns null (defensive — covers "unknown" PlatformId).
-
-describe("ctx_doctor hook script checks", () => {
-  const serverSrc = readServerSource();
-
-  test("resolves relative hook script paths against pluginRoot", () => {
-    const doctorSection = serverSrc.slice(serverSrc.indexOf("ctx_doctor"), serverSrc.indexOf("ctx_upgrade"));
-    expect(doctorSection).toContain("for (const scriptPath of hookScriptPaths)");
-    expect(doctorSection).toContain("const hookPath = resolve(pluginRoot, scriptPath)");
-    expect(doctorSection).not.toContain("for (const hookPath of hookScriptPaths)");
-  });
 });

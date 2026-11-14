@@ -53,7 +53,7 @@ describe("ctx_index: Read deny-policy enforcement (#442)", () => {
       env: {
         ...process.env,
         CONTEXT_MODE_DISABLE_VERSION_CHECK: "1",
-        CLAUDE_PROJECT_DIR: projectDir,
+        PI_PROJECT_DIR: projectDir,
         ...extraEnv,
       },
     });

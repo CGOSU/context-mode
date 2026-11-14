@@ -55,7 +55,7 @@ describe("ctx_index: directory path support (#687)", () => {
       env: {
         ...process.env,
         CONTEXT_MODE_DISABLE_VERSION_CHECK: "1",
-        CLAUDE_PROJECT_DIR: projectDirEnv,
+        PI_PROJECT_DIR: projectDirEnv,
       },
     });
   }

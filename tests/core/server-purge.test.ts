@@ -18,10 +18,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("ctx_purge is the sole reset/wipe mechanism", () => {
   const serverSrc = readServerSource();
-  const routingBlockSrc = readFileSync(
-    resolve(__dirname, "../../hooks/routing-block.mjs"),
-    "utf-8",
-  );
 
   // ── ctx_stats has NO reset capability ──
   test("ctx_stats does NOT accept a reset parameter", () => {
@@ -39,16 +35,6 @@ describe("ctx_purge is the sole reset/wipe mechanism", () => {
   test("server has no checkClearStatsFlag mechanism", () => {
     expect(serverSrc).not.toContain("checkClearStatsFlag");
     expect(serverSrc).not.toContain(".clear-stats");
-  });
-
-  // ── Routing block: no reset instructions for /clear or /compact ──
-  test("routing block does not instruct any reset after /clear or /compact", () => {
-    expect(routingBlockSrc).not.toContain("reset: true");
-    expect(routingBlockSrc).not.toContain("ctx_stats(reset");
-  });
-
-  test("routing block informs user about ctx_purge availability", () => {
-    expect(routingBlockSrc).toMatch(/ctx.purge/i);
   });
 
   // ── ctx_purge is the complete wipe tool ──
@@ -141,18 +127,12 @@ describe("ctx_purge scoped handler (issue #520)", () => {
     /server\.registerTool\(\s*"ctx_purge"[\s\S]*?^\);/m,
   )![0];
 
-  // Slice 4 — stats file & in-memory reset gated on scope === "project".
-  // A scoped per-session purge must leave the persisted stats file alone
-  // (other sessions in the project still own those bytes).
-  test("slice 4: persisted stats file unlink is gated on scope === 'project'", () => {
-    const statsBlockMatch = purgeBody.match(/getStatsFilePath\(\)[\s\S]{0,300}/);
-    expect(statsBlockMatch, "stats unlink block must exist in handler").not.toBeNull();
-    // The whole stats reset (in-memory + file unlink) must live under a
-    // `if (... === "project")` branch — verified by ensuring the stats
-    // unlink is NOT at the top level of the handler.
-    const statsIdx = purgeBody.indexOf("getStatsFilePath()");
-    const beforeStats = purgeBody.slice(0, statsIdx);
-    expect(beforeStats).toMatch(/scope\s*===\s*["']project["']/);
+  // Slice 4 — in-memory stats reset is gated on scope === "project".
+  test("slice 4: in-memory stats reset is gated on scope === 'project'", () => {
+    const resetIdx = purgeBody.indexOf("sessionStats.calls = {}");
+    expect(resetIdx).toBeGreaterThan(-1);
+    const beforeReset = purgeBody.slice(0, resetIdx);
+    expect(beforeReset).toMatch(/scope\s*===\s*["']project["']/i);
   });
 
   // Slice 5 — back-compat: bare {confirm:true} keeps verbatim behavior.

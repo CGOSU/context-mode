@@ -12,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // ctx_doctor resource cleanup regression (#247)
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const mcpEntry = resolve(__dirname, "..", "..", "start.mjs");
+export const mcpEntry = resolve(__dirname, "..", "..", "server.bundle.mjs");
 
 
 export interface DoctorJsonRpcResponse {

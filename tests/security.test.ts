@@ -872,29 +872,21 @@ describe("CLAUDE_CONFIG_DIR honors security policy reader", () => {
  *
  * Each test sandboxes HOME so the home-rooted lookup hits a tmp dir.
  */
-describe("cross-adapter deny-policy parity (#451 round-3)", () => {
-  const ADAPTER_SEGMENTS: ReadonlyArray<readonly [string, readonly string[]]> = [
-    ["cursor",            [".cursor"]],
-    ["codex",             [".codex"]],
-    ["qwen-code",         [".qwen"]],
-    ["gemini-cli",        [".gemini"]],
-    ["jetbrains-copilot", [".config", "JetBrains"]],
-    ["vscode-copilot",    [".vscode"]],
+describe("Pi + Claude compat deny-policy parity (#451 round-3)", () => {
+  const SEGMENTS: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ["pi",     [".pi"]],
+    ["claude", [".claude"]],
   ];
 
   let parityTmpBase: string;
   let savedHome: string | undefined;
   let savedUserprofile: string | undefined;
-  let savedPlatform: string | undefined;
-  let savedClaudeConfig: string | undefined;
 
   beforeAll(() => {
     parityTmpBase = join(tmpdir(), `security-parity-test-${Date.now()}`);
     mkdirSync(parityTmpBase, { recursive: true });
     savedHome = process.env.HOME;
     savedUserprofile = process.env.USERPROFILE;
-    savedPlatform = process.env.CONTEXT_MODE_PLATFORM;
-    savedClaudeConfig = process.env.CLAUDE_CONFIG_DIR;
   });
 
   afterAll(() => {
@@ -902,75 +894,62 @@ describe("cross-adapter deny-policy parity (#451 round-3)", () => {
     else process.env.HOME = savedHome;
     if (savedUserprofile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = savedUserprofile;
-    if (savedPlatform === undefined) delete process.env.CONTEXT_MODE_PLATFORM;
-    else process.env.CONTEXT_MODE_PLATFORM = savedPlatform;
-    if (savedClaudeConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-    else process.env.CLAUDE_CONFIG_DIR = savedClaudeConfig;
     rmSync(parityTmpBase, { recursive: true, force: true });
   });
 
-  for (const [adapter, segments] of ADAPTER_SEGMENTS) {
-    test(`readBashPolicies: ${adapter} adapter settings.json deny is honored`, () => {
-      const fakeHome = join(parityTmpBase, `${adapter}-home`);
-      const adapterDir = join(fakeHome, ...segments);
-      mkdirSync(adapterDir, { recursive: true });
-      const denyPattern = `Bash(${adapter}-marker *)`;
+  for (const [label, segments] of SEGMENTS) {
+    test(`readBashPolicies: ${label} settings.json deny is honored`, () => {
+      const fakeHome = join(parityTmpBase, `${label}-home`);
+      const dir = join(fakeHome, ...segments);
+      mkdirSync(dir, { recursive: true });
+      const denyPattern = `Bash(${label}-marker *)`;
       writeFileSync(
-        join(adapterDir, "settings.json"),
-        JSON.stringify({
-          permissions: { allow: [], deny: [denyPattern] },
-        }),
+        join(dir, "settings.json"),
+        JSON.stringify({ permissions: { allow: [], deny: [denyPattern] } }),
       );
 
-      // Sandbox HOME so home-rooted resolution lands in our tmp tree.
       process.env.HOME = fakeHome;
       process.env.USERPROFILE = fakeHome;
-      process.env.CONTEXT_MODE_PLATFORM = adapter;
-      delete process.env.CLAUDE_CONFIG_DIR;
 
       const policies = readBashPolicies();
       const allDeny = policies.flatMap((p) => p.deny);
       assert.ok(
         allDeny.includes(denyPattern),
-        `${adapter}: expected '${denyPattern}' in deny list, got ${JSON.stringify(allDeny)}`,
+        `${label}: expected '${denyPattern}' in deny list, got ${JSON.stringify(allDeny)}`,
       );
     });
 
-    test(`readToolDenyPatterns: ${adapter} adapter Read deny is honored`, () => {
-      const fakeHome = join(parityTmpBase, `${adapter}-home-read`);
-      const adapterDir = join(fakeHome, ...segments);
-      mkdirSync(adapterDir, { recursive: true });
-      const fileMarker = `.env.${adapter}`;
+    test(`readToolDenyPatterns: ${label} settings.json Read deny is honored`, () => {
+      const fakeHome = join(parityTmpBase, `${label}-home-read`);
+      const dir = join(fakeHome, ...segments);
+      mkdirSync(dir, { recursive: true });
+      const fileMarker = `.env.${label}`;
       writeFileSync(
-        join(adapterDir, "settings.json"),
-        JSON.stringify({
-          permissions: { allow: [], deny: [`Read(${fileMarker})`] },
-        }),
+        join(dir, "settings.json"),
+        JSON.stringify({ permissions: { allow: [], deny: [`Read(${fileMarker})`] } }),
       );
 
       process.env.HOME = fakeHome;
       process.env.USERPROFILE = fakeHome;
-      process.env.CONTEXT_MODE_PLATFORM = adapter;
-      delete process.env.CLAUDE_CONFIG_DIR;
 
       const result = readToolDenyPatterns("Read");
       const flat = result.flat();
       assert.ok(
         flat.includes(fileMarker),
-        `${adapter}: expected '${fileMarker}' in Read deny globs, got ${JSON.stringify(flat)}`,
+        `${label}: expected '${fileMarker}' in Read deny globs, got ${JSON.stringify(flat)}`,
       );
     });
   }
 
-  test("union semantics: claude global is also read when non-claude adapter active", () => {
+  test("union semantics: both ~/.pi/settings.json and ~/.claude/settings.json are honored", () => {
     const fakeHome = join(parityTmpBase, "union-home");
-    const cursorDir = join(fakeHome, ".cursor");
+    const piDir = join(fakeHome, ".pi");
     const claudeDir = join(fakeHome, ".claude");
-    mkdirSync(cursorDir, { recursive: true });
+    mkdirSync(piDir, { recursive: true });
     mkdirSync(claudeDir, { recursive: true });
     writeFileSync(
-      join(cursorDir, "settings.json"),
-      JSON.stringify({ permissions: { allow: [], deny: ["Bash(cursor-only *)"] } }),
+      join(piDir, "settings.json"),
+      JSON.stringify({ permissions: { allow: [], deny: ["Bash(pi-only *)"] } }),
     );
     writeFileSync(
       join(claudeDir, "settings.json"),
@@ -979,14 +958,12 @@ describe("cross-adapter deny-policy parity (#451 round-3)", () => {
 
     process.env.HOME = fakeHome;
     process.env.USERPROFILE = fakeHome;
-    process.env.CONTEXT_MODE_PLATFORM = "cursor";
-    delete process.env.CLAUDE_CONFIG_DIR;
 
     const policies = readBashPolicies();
     const allDeny = policies.flatMap((p) => p.deny);
     assert.ok(
-      allDeny.includes("Bash(cursor-only *)"),
-      `expected cursor deny in union, got ${JSON.stringify(allDeny)}`,
+      allDeny.includes("Bash(pi-only *)"),
+      `expected pi deny in union, got ${JSON.stringify(allDeny)}`,
     );
     assert.ok(
       allDeny.includes("Bash(claude-only *)"),

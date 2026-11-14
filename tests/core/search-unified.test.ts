@@ -459,10 +459,10 @@ describe("searchAutoMemory", () => {
     expect(r.title).toContain("[auto-memory]");
   });
 
-  test("finds content in CLAUDE.md files (unified)", () => {
+  test("finds content in AGENTS.md files (unified)", () => {
     const configDir = createTempDir();
     writeFileSync(
-      join(configDir, "CLAUDE.md"),
+      join(configDir, "AGENTS.md"),
       "# Rules\nAlways use TypeScript strict mode.\nNever skip tests.\n",
     );
 

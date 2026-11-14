@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 export function readCliSource(): string {
   const root = resolve(import.meta.dirname, "../..");
   return [
-    "cli-shared", "cli-hooks", "cli", "cli-knowledge", "cli-doctor",
-    "cli-insight", "cli-upgrade", "cli-statusline",
+    "cli-shared", "cli", "cli-knowledge", "cli-doctor",
+    "cli-insight", "cli-upgrade",
   ].map((name) => readFileSync(resolve(root, "src", name + ".ts"), "utf8")).join("\n");
 }

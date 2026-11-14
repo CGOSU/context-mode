@@ -6,55 +6,13 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { describe, test, expect } from "vitest";
-import { sanitizeSchemaForStrictClients, REGISTERED_CTX_TOOLS } from "../../src/server.js";
+import { REGISTERED_CTX_TOOLS } from "../../src/server.js";
 import { stripJsonComments, parseJsonc } from "../../src/util/jsonc.js";
 
 
 import { readServerSource } from "../helpers/server-source.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-
-// #787 review regression, applied to server.ts: its local stripJsonComments
-// ended with a whole-string trailing-comma regex that deleted commas INSIDE
-// string values ("[1, ]" -> "[1 ]"). That corruption always leaves the JSON
-// valid (only the comma char is deleted; the anchoring bracket stays), and
-// shouldSuppressMcpToolsForNativePluginHost() — the only public surface over
-// readNativePluginHostSettings() — checks just the plugin array for a
-// "context-mode" substring and the mcp object for a "context-mode" key, so a
-// deleted in-string comma can never flip the boolean ("context-mode" contains
-// no comma to delete and no bracket to leave behind). Pin the fix
-// structurally instead: server.ts must delegate to the shared string-aware
-// src/util/jsonc.ts — whose in-string-comma behavior IS pinned by the
-// "parseJsonc / stripJsonComments" suite below — and must not reintroduce a
-// local whole-string trailing-comma regex.
-test("server.ts delegates JSONC stripping to string-aware src/util/jsonc (#787 in-string trailing-comma regression)", async () => {
-  const serverSrc = readServerSource();
-  expect(serverSrc).toContain('from "./util/jsonc.js"');
-  expect(serverSrc).not.toContain('.replace(/,(\\s*[}\\]])/g');
-  // End-to-end sanity through the public boolean: a JSONC config that needs
-  // the strip path (comment + real trailing comma) and embeds a
-  // trailing-comma-like pattern inside a string value still parses and
-  // suppresses.
-  const { shouldSuppressMcpToolsForNativePluginHost } = await import("../../src/server.js");
-  const dir = mkdtempSync(join(tmpdir(), "opencode-jsonc-comma-"));
-  const cwd = process.cwd();
-  try {
-    writeFileSync(join(dir, "opencode.jsonc"), `{
-      // forces the comment/trailing-comma strip path
-      "note": "array literal: [1, ]",
-      "plugin": ["context-mode"],
-      "mcp": {
-        "context-mode": { "type": "local", "command": ["context-mode"] }
-      },
-    }\n`);
-    process.chdir(dir);
-    expect(shouldSuppressMcpToolsForNativePluginHost({ platform: "opencode" })).toBe(true);
-  } finally {
-    process.chdir(cwd);
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 
 // ─── src/util/jsonc — shared string-aware JSONC strip/parse (#787/#806) ─────
@@ -103,74 +61,6 @@ describe("parseJsonc / stripJsonComments (src/util/jsonc)", () => {
 
   test("returns undefined when input is not JSON at all", () => {
     expect(parseJsonc("not json at all {{")).toBeUndefined();
-  });
-});
-
-
-// Gemini's function-calling API (Antigravity CLI `agy`, Gemini CLI) rejects
-// JSON Schema `const` and `additionalProperties` and then silently drops the
-// tool from the model's function list. The sanitizer rewrites the EMITTED
-// tools/list schema in a behavior-preserving way so those tools become callable.
-describe("sanitizeSchemaForStrictClients", () => {
-  test("rewrites `const: X` to `enum: [X]` (an identical single-value constraint)", () => {
-    expect(sanitizeSchemaForStrictClients({ const: "javascript" })).toEqual({ enum: ["javascript"] });
-    expect(sanitizeSchemaForStrictClients({ const: 1 })).toEqual({ enum: [1] });
-  });
-
-  test("strips `additionalProperties` (advisory-only — Zod validates args server-side)", () => {
-    const out = sanitizeSchemaForStrictClients({
-      type: "object",
-      additionalProperties: false,
-      properties: { a: { type: "string" } },
-    }) as Record<string, unknown>;
-    expect(out).not.toHaveProperty("additionalProperties");
-    expect(out.type).toBe("object");
-    expect(out.properties).toEqual({ a: { type: "string" } });
-  });
-
-  test("preserves every Gemini-compatible keyword unchanged", () => {
-    // enum / pattern / default / minLength etc. are accepted by Gemini and must
-    // pass through untouched so non-Gemini clients see an identical schema.
-    const input = {
-      type: "string",
-      enum: ["a", "b"],
-      pattern: "^x",
-      default: "a",
-      minLength: 1,
-      description: "desc",
-    };
-    expect(sanitizeSchemaForStrictClients(input)).toEqual(input);
-  });
-
-  test("recurses through nested properties and arrays", () => {
-    const input = {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        language: { const: "shell" },
-        items: { type: "array", items: { const: 1 }, additionalProperties: true },
-      },
-    };
-    expect(sanitizeSchemaForStrictClients(input)).toEqual({
-      type: "object",
-      properties: {
-        language: { enum: ["shell"] },
-        items: { type: "array", items: { enum: [1] } },
-      },
-    });
-  });
-
-  test("leaves primitives and null untouched", () => {
-    expect(sanitizeSchemaForStrictClients("x")).toBe("x");
-    expect(sanitizeSchemaForStrictClients(7)).toBe(7);
-    expect(sanitizeSchemaForStrictClients(true)).toBe(true);
-    expect(sanitizeSchemaForStrictClients(null)).toBe(null);
-  });
-
-  test("does not mutate the input object", () => {
-    const input = { const: "x", additionalProperties: false };
-    sanitizeSchemaForStrictClients(input);
-    expect(input).toEqual({ const: "x", additionalProperties: false });
   });
 });
 

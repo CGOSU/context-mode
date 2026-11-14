@@ -42,14 +42,10 @@ describe("Version outdated warning in trackResponse", () => {
     expect(serverSrc).toContain("_warningBurstCount");
   });
 
-  test("getUpgradeHint returns platform-specific command", () => {
+  test("getUpgradeHint returns Pi-specific upgrade instructions", () => {
     expect(serverSrc).toContain("function getUpgradeHint");
-    // Claude Code gets slash command
-    expect(serverSrc).toMatch(/claude.code.*ctx.upgrade|ctx.upgrade.*claude.code/i);
-    // npm platforms get npm update
-    expect(serverSrc).toContain("npm update -g context-mode");
-    // OpenClaw gets its own command
-    expect(serverSrc).toContain("npm run install:openclaw");
+    expect(serverSrc).toContain("pi update");
+    expect(serverSrc).toContain("npm run build:pi");
   });
 });
 
@@ -77,7 +73,7 @@ describe("FS read instrumentation", () => {
 
   test("parses __CM_FS__ from stderr and adds to bytesSandboxed", () => {
     expect(serverSrc).toContain("__CM_FS__:(\\d+)");
-    expect(serverSrc).toContain("sessionStats.bytesSandboxed += parseInt(fsMatch[1])");
+    expect(serverSrc).toContain("sessionStats.bytesSandboxed += bytes");
   });
 
   test("cleans __CM_FS__ marker from stderr output", () => {
@@ -142,56 +138,5 @@ describe("batch_execute FS read tracking", () => {
     expect(serverSrc).toMatch(/4-8\s+(for I\/O-bound|I\/O-bound batches)/);
     expect(serverSrc).toContain("CPU-bound or stateful");
     expect(serverSrc).toContain("keep concurrency at 1");
-  });
-});
-
-
-describe("getStatsFilePath: sanitize CLAUDE_SESSION_ID before path.join", () => {
-  // CLAUDE_SESSION_ID flows from the hosting process straight into a
-  // path.join, and path.join collapses ".." segments. CLAUDE_SESSION_ID=
-  // "../../evil" would write "stats-evil.json" two levels above statsDir.
-  // The env var is not under direct MCP-tool-caller control, but in CI /
-  // multi-tenant contexts where the host env is partly influenceable this
-  // is an arbitrary-write primitive. Reject any session id whose
-  // characters aren't [A-Za-z0-9._-] and fall back to pid-based id.
-
-  const SERVER_SOURCE = readServerSource();
-
-  test("sanitizeSessionId exists and is called from getStatsFilePath", () => {
-    expect(SERVER_SOURCE).toMatch(/const SESSION_ID_RE = \/\^\[A-Za-z0-9\._-\]\+\$\//);
-    expect(SERVER_SOURCE).toContain("function sanitizeSessionId(raw: string): string {");
-    const getStatsSlice = SERVER_SOURCE.slice(
-      SERVER_SOURCE.indexOf("function getStatsFilePath"),
-      SERVER_SOURCE.indexOf("function getStatsFilePath") + 600,
-    );
-    expect(getStatsSlice).toMatch(/sanitizeSessionId\(raw\)/);
-    // The pre-fix direct splice of the env var into the join is gone.
-    expect(getStatsSlice).not.toMatch(
-      /join\(statsDir, `stats-\$\{process\.env\.CLAUDE_SESSION_ID/,
-    );
-  });
-
-  test("algorithm: sanitizer rejects traversal characters and falls back to pid", () => {
-    // Mirror the production sanitizer in isolation. The malicious shapes
-    // must all fall through to the pid-based id; the legitimate UUID-ish
-    // shape passes through unchanged.
-    const SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
-    const sanitize = (raw: string): string =>
-      SESSION_ID_RE.test(raw) ? raw : `pid-${process.ppid}`;
-
-    expect(sanitize("../../evil")).toMatch(/^pid-\d+$/);
-    expect(sanitize("/etc/passwd")).toMatch(/^pid-\d+$/);
-    expect(sanitize("a/b")).toMatch(/^pid-\d+$/);
-    expect(sanitize("a\\b")).toMatch(/^pid-\d+$/);
-    expect(sanitize("..\\..")).toMatch(/^pid-\d+$/);
-    expect(sanitize("")).toMatch(/^pid-\d+$/);
-
-    // Legitimate ids pass through.
-    expect(sanitize("session-abc123")).toBe("session-abc123");
-    expect(sanitize("pid-12345")).toBe("pid-12345");
-    expect(sanitize("550e8400-e29b-41d4-a716-446655440000")).toBe(
-      "550e8400-e29b-41d4-a716-446655440000",
-    );
-    expect(sanitize("MyHost_2024.01")).toBe("MyHost_2024.01");
   });
 });

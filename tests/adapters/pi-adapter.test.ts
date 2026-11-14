@@ -3,8 +3,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { PiAdapter } from "../../src/adapters/pi/index.js";
-import { ClaudeCodeAdapter } from "../../src/adapters/claude-code/index.js";
-import { getAdapter, getSessionDirSegments } from "../../src/adapters/detect.js";
 import { hashProjectDirCanonical, resolveSessionDbPath } from "../../src/session/db.js";
 
 describe("PiAdapter — Pi platform adapter", () => {
@@ -43,25 +41,6 @@ describe("PiAdapter — Pi platform adapter", () => {
     });
   });
 
-  // ── getAdapter("pi") routing — the bug being fixed ─────
-  // Issue #473 follow-up: getAdapter("pi") was returning ClaudeCodeAdapter
-  // via the default branch, causing Pi user data to leak into ~/.claude/.
-
-  describe("getAdapter('pi') routing", () => {
-    it("returns a PiAdapter instance, not ClaudeCodeAdapter", async () => {
-      const a = await getAdapter("pi");
-      expect(a).toBeInstanceOf(PiAdapter);
-      expect(a).not.toBeInstanceOf(ClaudeCodeAdapter);
-    });
-
-    it("returned adapter writes session dir under ~/.pi/, not ~/.claude/", async () => {
-      const a = await getAdapter("pi");
-      const dir = a.getSessionDir();
-      expect(dir).toContain(".pi");
-      expect(dir).not.toContain(".claude");
-    });
-  });
-
   // ── Config paths — data isolation under ~/.pi/ ─────────
   // The OMP fix mirror for issue #473 — verify Pi data NEVER bleeds
   // into ~/.claude/ regardless of which harness installed context-mode.
@@ -95,10 +74,6 @@ describe("PiAdapter — Pi platform adapter", () => {
 
     it("config dir is ~/.pi", () => {
       expect(adapter.getConfigDir()).toBe(resolve(homedir(), ".pi"));
-    });
-
-    it("getSessionDirSegments('pi') matches adapter sessionDirSegments", () => {
-      expect(getSessionDirSegments("pi")).toEqual([".pi"]);
     });
   });
 
