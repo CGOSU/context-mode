@@ -881,7 +881,7 @@ export class SessionDB extends SQLiteBase {
   }> {
     try {
       const escapedQuery = query.replace(/[%_]/g, (char) => "\\" + char);
-      const sourceParam = source ?? null;
+      const sourceParam = typeof source === "string" && source.trim().length > 0 ? source.trim() : null;
       return this.stmt(S.searchEvents).all(
         projectDir,
         escapedQuery,

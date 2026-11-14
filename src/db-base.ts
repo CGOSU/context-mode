@@ -45,9 +45,11 @@ export interface PreparedStatement {
  */
 export class BunSQLiteAdapter {
   #raw: any;
+  readonly readonly: boolean;
 
-  constructor(rawDb: any) {
+  constructor(rawDb: any, readonly = false) {
     this.#raw = rawDb;
+    this.readonly = readonly;
   }
 
   pragma(source: string): any {
@@ -120,9 +122,11 @@ export class BunSQLiteAdapter {
  */
 export class NodeSQLiteAdapter {
   #raw: any; // DatabaseSync instance
+  readonly readonly: boolean;
 
-  constructor(rawDb: any) {
+  constructor(rawDb: any, readonly = false) {
     this.#raw = rawDb;
+    this.readonly = readonly;
   }
 
   pragma(source: string): any {
@@ -262,7 +266,7 @@ export function loadDatabase(): typeof DatabaseConstructor {
           readonly: opts?.readonly,
           create: true,
         });
-        const adapter = new BunSQLiteAdapter(raw);
+        const adapter = new BunSQLiteAdapter(raw, Boolean(opts?.readonly));
         // Propagate busy_timeout — better-sqlite3 does this via constructor
         // option but bun:sqlite does not, so we set it via pragma (#243)
         if (opts?.timeout) {
@@ -296,7 +300,7 @@ export function loadDatabase(): typeof DatabaseConstructor {
           const raw = new DatabaseSync(path, {
             readOnly: opts?.readonly ?? false,
           });
-          const adapter = new NodeSQLiteAdapter(raw);
+          const adapter = new NodeSQLiteAdapter(raw, Boolean(opts?.readonly));
           // Propagate busy_timeout — node:sqlite's DatabaseSync constructor
           // silently ignores `{ timeout }` (unlike better-sqlite3's native
           // C++ constructor), so we set it via PRAGMA, mirroring the Bun
@@ -394,10 +398,12 @@ export function deleteDBFiles(dbPath: string): void {
  * always call this in a finally/cleanup path without try/catch.
  */
 export function closeDB(db: DatabaseInstance): void {
-  try {
-    // Checkpoint WAL before close to prevent contention on restart (#103)
-    db.pragma("wal_checkpoint(TRUNCATE)");
-  } catch { /* WAL may not be active */ }
+  if (!(db as { readonly?: boolean }).readonly) {
+    try {
+      // Passive WAL checkpoint before close — non-blocking on shared DBs
+      db.pragma("wal_checkpoint(PASSIVE)");
+    } catch { /* WAL may not be active */ }
+  }
   try {
     db.close();
   } catch {

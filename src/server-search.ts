@@ -145,12 +145,15 @@ EXAMPLE: ctx_search(queries: ["last user prompt", "active skills", "open blocker
         });
       }
 
-      const { limit = 3, source, contentType, project } = params as {
+      const { limit = 3, source: rawSource, contentType, project } = params as {
         limit?: number;
         source?: string;
         contentType?: "code" | "prose";
         project?: string;
       };
+      const source = typeof rawSource === "string" && rawSource.trim().length > 0
+        ? rawSource.trim()
+        : undefined;
 
       // Resolve the per-project scope (#737). When shared-DB mode is off the
       // resolver returns `undefined` and `project` is silently ignored — the

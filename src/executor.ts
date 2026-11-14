@@ -1,4 +1,4 @@
-import { spawn, execSync, execFileSync } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -193,17 +193,31 @@ function cleanupTmpDir(tmpDir: string): void {
   }
 }
 
-/** Kill process tree — on Windows uses taskkill /T; on Unix kills the process group. */
+const PIPE_DRAIN_MS = 200;
+
+/** Kill process tree without blocking the host event loop. */
 function killTree(proc: ReturnType<typeof spawn>): void {
-  if (isWin && proc.pid) {
+  if (!proc.pid) return;
+  if (isWin) {
     try {
-      execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: "pipe" });
-    } catch { /* already dead */ }
-  } else if (proc.pid) {
-    try {
-      // Kill entire process group (negative PID) to prevent orphaned children
-      process.kill(-proc.pid, "SIGKILL");
-    } catch { /* already dead */ }
+      const killer = spawn("taskkill", ["/F", "/T", "/PID", String(proc.pid)], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.on("error", () => {
+        try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+      });
+      killer.unref();
+    } catch {
+      try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+    }
+    return;
+  }
+  try {
+    // Kill entire process group (negative PID) to prevent orphaned children
+    process.kill(-proc.pid, "SIGKILL");
+  } catch {
+    try { process.kill(proc.pid, "SIGKILL"); } catch { /* already dead */ }
   }
 }
 
@@ -536,9 +550,25 @@ export class PolyglotExecutor {
         }
       });
 
-      proc.on("close", (exitCode) => {
+      let lastExitCode: number | null = null;
+      let drainTimer: NodeJS.Timeout | undefined;
+
+      const settle = (exitCode: number | null) => {
         clearTimeout(timer);
-        if (resolved) return; // Already resolved by background timeout
+        if (drainTimer) {
+          clearTimeout(drainTimer);
+          drainTimer = undefined;
+        }
+        if (resolved) return;
+        resolved = true;
+        if (proc.stdout) {
+          proc.stdout.removeAllListeners("data");
+          proc.stdout.destroy();
+        }
+        if (proc.stderr) {
+          proc.stderr.removeAllListeners("data");
+          proc.stderr.destroy();
+        }
         const rawStdout = Buffer.concat(stdoutChunks).toString("utf-8");
         let rawStderr = Buffer.concat(stderrChunks).toString("utf-8");
 
@@ -546,20 +576,37 @@ export class PolyglotExecutor {
           rawStderr += `\n[output capped at ${(this.#hardCapBytes / 1024 / 1024).toFixed(0)}MB — process killed]`;
         }
 
-        const stdout = rawStdout;
-        const stderr = rawStderr;
-
         res({
-          stdout,
-          stderr,
+          stdout: rawStdout,
+          stderr: rawStderr,
           exitCode: timedOut ? 1 : (exitCode ?? 1),
           timedOut,
         });
+      };
+
+      // Settle on process exit + bounded pipe drain so an orphaned grandchild
+      // keeping stdout/stderr open cannot hang ctx_execute past exit/timeout.
+      proc.on("exit", (exitCode) => {
+        lastExitCode = exitCode;
+        if (resolved || drainTimer) return;
+        drainTimer = setTimeout(() => {
+          settle(lastExitCode);
+        }, PIPE_DRAIN_MS);
+        drainTimer.unref();
+      });
+
+      proc.on("close", (exitCode) => {
+        settle(lastExitCode ?? exitCode);
       });
 
       proc.on("error", (err) => {
         clearTimeout(timer);
+        if (drainTimer) {
+          clearTimeout(drainTimer);
+          drainTimer = undefined;
+        }
         if (resolved) return; // Already resolved by background timeout
+        resolved = true;
         res({
           stdout: "",
           stderr: err.message,

@@ -565,4 +565,37 @@ describe("SessionDB.searchEvents (unified)", () => {
     const results = db.searchEvents("nonexistent-xyzzy", 10, "/project");
     expect(results.length).toBe(0);
   });
+
+  test("treats blank or whitespace source filter as absent across SessionDB and searchAllSources", () => {
+    const db = createTestDB();
+    const sessionId = `test-${randomUUID()}`;
+    db.ensureSession(sessionId, "/project");
+    db.insertEvent(sessionId, {
+      type: "decision",
+      category: "decision",
+      data: "use passive wal checkpoint on close",
+      priority: 2,
+    }, "PostToolUse", { projectDir: "/project", source: "test", confidence: 1 });
+
+    expect(db.searchEvents("checkpoint", 10, "/project", "")).toHaveLength(1);
+    expect(db.searchEvents("checkpoint", 10, "/project", "   ")).toHaveLength(1);
+
+    const store = new ContentStore();
+    store.index({ content: "passive wal checkpoint optimization", source: "notes.md" });
+    expect(store.searchWithFallback("checkpoint", 3, "   ").length).toBeGreaterThanOrEqual(1);
+
+    const unified = searchAllSources({
+      query: "checkpoint",
+      limit: 5,
+      store,
+      sort: "timeline",
+      source: "   ",
+      sessionDB: db,
+      projectDir: "/project",
+    });
+    expect(unified.some((r) => r.origin === "indexed-content")).toBe(true);
+    expect(unified.some((r) => r.origin === "prior-session")).toBe(true);
+    store.close();
+    db.close();
+  });
 });

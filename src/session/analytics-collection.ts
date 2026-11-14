@@ -8,8 +8,10 @@ import { ensureSessionEventsSchema } from "./db.js";
 import { categoryLabels, categoryHints } from "./analytics-labels.js";
 
 function resolvePiConfigDir(): string {
-  const raw = process.env.PI_CONFIG_DIR || process.env.PI_CODING_AGENT_DIR || process.env.CLAUDE_CONFIG_DIR;
-  if (raw && raw.trim() !== "") {
+  const raw = [process.env.PI_CONFIG_DIR, process.env.PI_CODING_AGENT_DIR, process.env.CLAUDE_CONFIG_DIR]
+    .find((v) => typeof v === "string" && v.trim() !== "")
+    ?.trim();
+  if (raw) {
     return raw.startsWith("~") ? resolve(homedir(), raw.replace(/^~[/\\]?/, "")) : resolve(raw);
   }
   return resolve(homedir(), ".pi");

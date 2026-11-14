@@ -913,20 +913,21 @@ export class ContentStore {
     sourceMatchMode: SourceMatchMode = "like",
   ): SearchResult[] {
     const sanitized = sanitizeQuery(query, mode);
+    const normalizedSource = typeof source === "string" && source.trim().length > 0 ? source.trim() : undefined;
 
     let stmt: PreparedStatement;
     let params: unknown[];
 
-    if (source && contentType) {
+    if (normalizedSource && contentType) {
       stmt = sourceMatchMode === "exact"
         ? this.#stmtSearchPorterExactContentType
         : this.#stmtSearchPorterFilteredContentType;
-      params = [sanitized, this.#sourceFilterParam(source, sourceMatchMode), contentType, limit];
-    } else if (source) {
+      params = [sanitized, this.#sourceFilterParam(normalizedSource, sourceMatchMode), contentType, limit];
+    } else if (normalizedSource) {
       stmt = sourceMatchMode === "exact"
         ? this.#stmtSearchPorterExact
         : this.#stmtSearchPorterFiltered;
-      params = [sanitized, this.#sourceFilterParam(source, sourceMatchMode), limit];
+      params = [sanitized, this.#sourceFilterParam(normalizedSource, sourceMatchMode), limit];
     } else if (contentType) {
       stmt = this.#stmtSearchPorterContentType;
       params = [sanitized, contentType, limit];
@@ -950,20 +951,21 @@ export class ContentStore {
   ): SearchResult[] {
     const sanitized = sanitizeTrigramQuery(query, mode);
     if (!sanitized) return [];
+    const normalizedSource = typeof source === "string" && source.trim().length > 0 ? source.trim() : undefined;
 
     let stmt: PreparedStatement;
     let params: unknown[];
 
-    if (source && contentType) {
+    if (normalizedSource && contentType) {
       stmt = sourceMatchMode === "exact"
         ? this.#stmtSearchTrigramExactContentType
         : this.#stmtSearchTrigramFilteredContentType;
-      params = [sanitized, this.#sourceFilterParam(source, sourceMatchMode), contentType, limit];
-    } else if (source) {
+      params = [sanitized, this.#sourceFilterParam(normalizedSource, sourceMatchMode), contentType, limit];
+    } else if (normalizedSource) {
       stmt = sourceMatchMode === "exact"
         ? this.#stmtSearchTrigramExact
         : this.#stmtSearchTrigramFiltered;
-      params = [sanitized, this.#sourceFilterParam(source, sourceMatchMode), limit];
+      params = [sanitized, this.#sourceFilterParam(normalizedSource, sourceMatchMode), limit];
     } else if (contentType) {
       stmt = this.#stmtSearchTrigramContentType;
       params = [sanitized, contentType, limit];

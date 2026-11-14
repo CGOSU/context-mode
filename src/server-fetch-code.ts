@@ -218,6 +218,7 @@ async function fetchWithManualRedirect(initialUrl) {
     if (resp.status < 300 || resp.status >= 400) return resp;
     const location = resp.headers.get('location') || resp.headers.get('Location');
     if (!location) return resp;
+    try { await resp.body?.cancel(); } catch {}
     if (redirectCount === MAX_REDIRECTS) {
       throw new Error('SSRF blocked: redirect chain exceeded ' + MAX_REDIRECTS + ' hops');
     }
@@ -380,6 +381,27 @@ export async function ssrfGuard(rawUrl: string): Promise<FetchOneResult | null> 
   }
 
   const strict = process.env.CTX_FETCH_STRICT === "1";
+  const bareHost = parsed.hostname.replace(/^\[|\]$/g, "");
+  if (/^[0-9.]+$/.test(bareHost) || bareHost.includes(":")) {
+    const verdict = classifyIp(bareHost);
+    if (verdict === "block") {
+      return {
+        kind: "fetch_error",
+        url: rawUrl,
+        error: `URL "${parsed.hostname}" is ${bareHost} — blocked (link-local / IMDS / multicast / reserved)`,
+        reason: "exit",
+      };
+    }
+    if (verdict === "private" && strict) {
+      return {
+        kind: "fetch_error",
+        url: rawUrl,
+        error: `URL "${parsed.hostname}" is private IP ${bareHost} — blocked under CTX_FETCH_STRICT=1`,
+        reason: "exit",
+      };
+    }
+    return null;
+  }
 
   // 2. DNS resolve + check IP ranges (hard-block + optional strict-mode block)
   try {
@@ -440,40 +462,107 @@ export async function ssrfGuard(rawUrl: string): Promise<FetchOneResult | null> 
  */
 export function classifyIp(rawIp: string): "block" | "private" | "public" {
   // RFC 6874 zone identifiers (`fe80::1%eth0`, URL-encoded `%25eth0`) must
-  // be stripped BEFORE any prefix/equality classification. Without the strip,
-  // a loopback `::1%eth0` no longer matches `lower === "::1"` and falls
-  // through to "public" — silently bypassing the SSRF guard. Strip first,
-  // classify second.
+  // be stripped BEFORE any prefix/equality classification. Must remain completely
+  // self-contained because buildFetchCode() embeds classifyIp.toString().
   const pctIdx = rawIp.indexOf("%");
   const ip = pctIdx === -1 ? rawIp : rawIp.slice(0, pctIdx);
   const lower = ip.toLowerCase();
 
-  // IPv6 takes priority — check for `:` first so IPv4-mapped addresses
-  // (`::ffff:127.0.0.1`) don't get incorrectly routed through the IPv4 parser.
   if (lower.includes(":")) {
-    // IPv4-mapped IPv6 (`::ffff:127.0.0.1`) — recurse through IPv4 classifier
-    const v4MappedMatch = lower.match(/^::ffff:([\d.]+)$/);
-    if (v4MappedMatch) return classifyIp(v4MappedMatch[1]);
-    // Hard-block
-    if (lower === "::") return "block"; // unspecified
-    if (lower.startsWith("fe8") || lower.startsWith("fe9") ||
-        lower.startsWith("fea") || lower.startsWith("feb")) return "block"; // fe80::/10 link-local
-    if (lower.startsWith("ff")) return "block"; // ff00::/8 multicast
-    // Private (loopback + ULA)
-    if (lower === "::1") return "private";
-    if (lower.startsWith("fc") || lower.startsWith("fd")) return "private"; // fc00::/7 ULA
+    const dblIdx = lower.indexOf("::");
+    if (dblIdx !== -1 && lower.indexOf("::", dblIdx + 2) !== -1) return "block";
+
+    const halves = dblIdx === -1 ? [lower] : [lower.slice(0, dblIdx), lower.slice(dblIdx + 2)];
+    const parsedHalves: number[][] = [];
+    for (let h = 0; h < halves.length; h++) {
+      const part = halves[h];
+      const list: number[] = [];
+      if (part !== "") {
+        const segs = part.split(":");
+        for (let i = 0; i < segs.length; i++) {
+          const seg = segs[i];
+          if (seg.includes(".")) {
+            // Trailing IPv4 literal only valid in the last segment of the tail half
+            if (h !== halves.length - 1 || i !== segs.length - 1) return "block";
+            const octs = seg.split(".");
+            if (octs.length !== 4) return "block";
+            const nums: number[] = [];
+            for (let k = 0; k < 4; k++) {
+              if (!/^\d{1,3}$/.test(octs[k])) return "block";
+              const n = parseInt(octs[k], 10);
+              if (n < 0 || n > 255) return "block";
+              nums.push(n);
+            }
+            list.push((nums[0] << 8) | nums[1], (nums[2] << 8) | nums[3]);
+          } else {
+            if (!/^[0-9a-f]{1,4}$/.test(seg)) return "block";
+            list.push(parseInt(seg, 16));
+          }
+        }
+      }
+      parsedHalves.push(list);
+    }
+
+    let groups: number[];
+    if (dblIdx === -1) {
+      if (parsedHalves[0].length !== 8) return "block";
+      groups = parsedHalves[0];
+    } else {
+      const fill = 8 - (parsedHalves[0].length + parsedHalves[1].length);
+      if (fill < 1) return "block";
+      groups = parsedHalves[0].slice();
+      for (let z = 0; z < fill; z++) groups.push(0);
+      for (let t = 0; t < parsedHalves[1].length; t++) groups.push(parsedHalves[1][t]);
+    }
+
+    const toV4 = (hi: number, lo: number): string =>
+      `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+
+    const g0 = groups[0], g1 = groups[1], g2 = groups[2], g3 = groups[3];
+    const g4 = groups[4], g5 = groups[5], g6 = groups[6], g7 = groups[7];
+
+    // :: (unspecified)
+    if ((g0 | g1 | g2 | g3 | g4 | g5 | g6 | g7) === 0) return "block";
+    // ::1 (loopback)
+    if ((g0 | g1 | g2 | g3 | g4 | g5 | g6) === 0 && g7 === 1) return "private";
+    // ::ffff:0:0/96 (IPv4-mapped) — recurse on embedded IPv4
+    if ((g0 | g1 | g2 | g3 | g4) === 0 && g5 === 0xffff) {
+      return classifyIp(toV4(g6, g7));
+    }
+    // ::/96 (deprecated IPv4-compatible IPv6)
+    if ((g0 | g1 | g2 | g3 | g4 | g5) === 0) return "block";
+    // 64:ff9b::/96 (NAT64 well-known prefix) — check embedded IPv4
+    if (g0 === 0x0064 && g1 === 0xff9b && (g2 | g3 | g4 | g5) === 0) {
+      return classifyIp(toV4(g6, g7));
+    }
+    // 64:ff9b:1::/48 (NAT64 local-use prefix)
+    if (g0 === 0x0064 && g1 === 0xff9b && g2 === 0x0001) return "block";
+    // 2002::/16 (6to4) — check embedded IPv4 in g1:g2
+    if (g0 === 0x2002) {
+      return classifyIp(toV4(g1, g2));
+    }
+    // fe80::/10 link-local, fec0::/10 deprecated site-local, ff00::/8 multicast
+    if ((g0 & 0xffc0) === 0xfe80) return "block";
+    if ((g0 & 0xffc0) === 0xfec0) return "block";
+    if ((g0 & 0xff00) === 0xff00) return "block";
+    // fc00::/7 ULA private
+    if ((g0 & 0xfe00) === 0xfc00) return "private";
     return "public";
   }
 
   // IPv4 (or non-IP string — malformed = block)
   if (!ip.includes(".")) return "block"; // not an IP at all
-  const parts = ip.split(".").map((p) => parseInt(p, 10));
-  if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) return "block";
+  const rawParts = ip.split(".");
+  if (rawParts.length !== 4 || rawParts.some((p) => !/^\d{1,3}$/.test(p))) return "block";
+  const parts = rawParts.map((p) => parseInt(p, 10));
+  if (parts.some((p) => p < 0 || p > 255)) return "block";
   const [a, b] = parts;
   // Hard-block (no legitimate use)
-  if (a === 169 && b === 254) return "block"; // link-local incl. 169.254.169.254 (IMDS)
-  if (a === 0) return "block";                 // 0.0.0.0/8 (current network)
-  if (a >= 224) return "block";                // 224.0.0.0+ multicast/reserved
+  if (a === 169 && b === 254) return "block";               // link-local incl. 169.254.169.254 (IMDS)
+  if (a === 0) return "block";                               // 0.0.0.0/8 (current network)
+  if (a === 100 && b >= 64 && b <= 127) return "block";      // 100.64.0.0/10 (CGNAT shared address space)
+  if (a === 198 && (b === 18 || b === 19)) return "block";   // 198.18.0.0/15 (benchmarking / reserved)
+  if (a >= 224) return "block";                              // 224.0.0.0/4 multicast & 240.0.0.0/4 reserved
   // Private (loopback + RFC1918) — allow by default
   if (a === 127) return "private";                          // 127.0.0.0/8 loopback
   if (a === 10) return "private";                           // 10.0.0.0/8

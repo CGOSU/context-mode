@@ -12,8 +12,10 @@ import { join, isAbsolute, resolve } from "node:path";
 import { hashProjectDirCanonical } from "../session/db.js";
 
 function resolvePiConfigDirDefault(): string {
-  const raw = process.env.PI_CONFIG_DIR || process.env.PI_CODING_AGENT_DIR;
-  if (raw && raw.trim() !== "") {
+  const raw = [process.env.PI_CONFIG_DIR, process.env.PI_CODING_AGENT_DIR]
+    .find((v) => typeof v === "string" && v.trim() !== "")
+    ?.trim();
+  if (raw) {
     return raw.startsWith("~") ? resolve(homedir(), raw.replace(/^~[/\\]?/, "")) : resolve(raw);
   }
   return resolve(homedir(), ".pi");

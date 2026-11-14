@@ -11,11 +11,7 @@ import { describe, test, expect } from "vitest";
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { classifyIp } from "../../src/server.js";
-// ═══════════════════════════════════════════════════════════════════════════
-// buildFetchCode — embedded SSRF guard contract (#476 review follow-ups)
-// ═══════════════════════════════════════════════════════════════════════════
-
-import { buildFetchCode } from "../../src/server.js";
+import { buildFetchCode, ssrfGuard } from "../../src/server-fetch-code.js";
 
 
 import { readServerSource } from "../helpers/server-source.js";
@@ -332,5 +328,37 @@ describe("buildFetchCode — IPv6 zone-id + generic dns.resolve", () => {
     const generated = buildFetchCode("https://example.com/x", "/tmp/x");
     expect(generated).toMatch(/dns\.resolve\s*=\s*function/);
     expect(generated).toMatch(/classifyIp/);
+  });
+
+  test("classifyIp blocks CGNAT, benchmarking, deprecated IPv6, NAT64, and 6to4 internal targets", async () => {
+    // Extended IPv4 ranges
+    expect(classifyIp("100.64.0.1")).toBe("block");
+    expect(classifyIp("100.127.255.254")).toBe("block");
+    expect(classifyIp("100.63.255.254")).toBe("public");
+    expect(classifyIp("100.128.0.1")).toBe("public");
+    expect(classifyIp("198.18.0.1")).toBe("block");
+    expect(classifyIp("198.19.255.254")).toBe("block");
+    expect(classifyIp("198.17.0.1")).toBe("public");
+    expect(classifyIp("198.20.0.1")).toBe("public");
+
+    // Full IPv6 normalization + embedded IPv4 transitions
+    expect(classifyIp("0:0:0:0:0:0:0:1")).toBe("private");
+    expect(classifyIp("::ffff:7f00:1")).toBe("private");
+    expect(classifyIp("::ffff:a9fe:a9fe")).toBe("block");
+    expect(classifyIp("::169.254.169.254")).toBe("block");
+    expect(classifyIp("::127.0.0.1")).toBe("block");
+    expect(classifyIp("fec0::1")).toBe("block");
+    expect(classifyIp("64:ff9b::169.254.169.254")).toBe("block");
+    expect(classifyIp("64:ff9b::127.0.0.1")).toBe("private");
+    expect(classifyIp("64:ff9b::8.8.8.8")).toBe("public");
+    expect(classifyIp("64:ff9b:1::1")).toBe("block");
+    expect(classifyIp("2002:a9fe:a9fe::1")).toBe("block");
+    expect(classifyIp("2002:7f00:1::1")).toBe("private");
+    expect(classifyIp("2002:0808:0808::1")).toBe("public");
+
+    // Pre-flight ssrfGuard rejects literal expanded/transition IPs without DNS
+    expect(await ssrfGuard("http://100.64.0.1/")).toMatchObject({ kind: "fetch_error" });
+    expect(await ssrfGuard("http://[64:ff9b:1::1]/")).toMatchObject({ kind: "fetch_error" });
+    expect(await ssrfGuard("http://[::169.254.169.254]/")).toMatchObject({ kind: "fetch_error" });
   });
 });

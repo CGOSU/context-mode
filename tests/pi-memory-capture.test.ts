@@ -333,4 +333,22 @@ describe("Pi capture and branch-scoped historical memory", () => {
     expect(db.getEvents(sessionId).some(e => e.data.includes("UNAPPENDED_0") && e.source_hook.includes('"entryId":null'))).toBe(true);
     expect(recentBranchEvents(db.getEvents(sessionId), ctx, 1).some(e => e.data.includes("UNAPPENDED_"))).toBe(false);
   });
+
+  it("prioritizes branch events matching the current post-compact prompt instead of earlier chatter", async () => {
+    // Seed an earlier important SQLite decision, then fill newer slots with unrelated observations
+    await seed("TARGET_DECISION: use passive checkpoint in sqlite closeDB", 3);
+    for (let i = 0; i < 12; i++) {
+      await seed(`UNRELATED_PADDING_${i}: ` + "x".repeat(220), 3);
+    }
+    branch.push({ id: "compact-relevance" });
+    await trigger("session_compact", { compactionEntry: { id: "compact-relevance" } });
+    // First turn on unrelated prompt uses static snapshot/current prompt
+    await trigger("before_agent_start", { prompt: "check sqlite checkpoint closeDB behavior", systemPrompt: "stable" });
+    const messages: any[] = [];
+    await trigger("context", { messages });
+    const body = JSON.stringify(messages);
+    expect(body).toContain("TARGET_DECISION");
+    // Unrelated padding should be partially displaced once MEMORY_LIMIT fills
+    expect(messages[0].content.length).toBeLessThanOrEqual(2400);
+  });
 });

@@ -3,12 +3,14 @@ import { homedir } from "node:os";
 import { relative, resolve, sep } from "node:path";
 
 function resolvePiGlobalSettingsPaths(): string[] {
-  const piDirRaw = process.env.PI_CONFIG_DIR || process.env.PI_CODING_AGENT_DIR;
-  const piRoot = piDirRaw && piDirRaw.trim()
+  const piDirRaw = [process.env.PI_CONFIG_DIR, process.env.PI_CODING_AGENT_DIR]
+    .find((v) => typeof v === "string" && v.trim() !== "")
+    ?.trim();
+  const piRoot = piDirRaw
     ? resolve(homedir(), piDirRaw.replace(/^~[/\\]?/, ""))
     : resolve(homedir(), ".pi");
-  const claudeDirRaw = process.env.CLAUDE_CONFIG_DIR;
-  const claudeRoot = claudeDirRaw && claudeDirRaw.trim()
+  const claudeDirRaw = process.env.CLAUDE_CONFIG_DIR?.trim();
+  const claudeRoot = claudeDirRaw
     ? resolve(homedir(), claudeDirRaw.replace(/^~[/\\]?/, ""))
     : resolve(homedir(), ".claude");
   const piSettings = resolve(piRoot, "settings.json");

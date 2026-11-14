@@ -104,8 +104,26 @@ export function graphObservation(tool: string, event: any, text: string | undefi
   return serialized;
 }
 
+/** Extract deduplicated search terms from the current user prompt for post-compact ordering. */
+function promptTerms(prompt?: string): string[] {
+  if (!prompt || typeof prompt !== "string") return [];
+  const matches = prompt.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu);
+  if (!matches) return [];
+  const seen = new Set<string>();
+  for (const token of matches) {
+    seen.add(token);
+    if (seen.size >= 16) break;
+  }
+  return [...seen];
+}
+
 /** Neutral, bounded excerpts with source ids; never promote old rules into authority. */
-export function historicalContext(events: StoredEvent[], sessionId: string, kind: "active_memory" | "session_resume"): string {
+export function historicalContext(
+  events: StoredEvent[],
+  sessionId: string,
+  kind: "active_memory" | "session_resume",
+  currentPrompt?: string,
+): string {
   if (!events.length) return "";
   const lines = [
     `<${kind} source="context-mode" session=${JSON.stringify(sessionId)}>`,
@@ -113,8 +131,23 @@ export function historicalContext(events: StoredEvent[], sessionId: string, kind
     'how_to_search: ctx_search({sort:"timeline", queries:["specific terms"]}) retrieves historical evidence; verify timestamps and original records.',
   ];
   let remaining = MEMORY_LIMIT - lines.join("\n").length - kind.length - 5;
-  // Newest first keeps the freshest observation when the character budget fills.
-  for (const event of [...events].reverse()) {
+  // Prioritize events matching the current prompt when available; keep newest-first tie-breaking.
+  const terms = promptTerms(currentPrompt);
+  const newestFirst = [...events].reverse();
+  const ordered = terms.length === 0
+    ? newestFirst
+    : newestFirst
+        .map((event, idx) => {
+          const hay = `${event.type} ${event.data}`.toLowerCase();
+          let score = 0;
+          for (const t of terms) {
+            if (hay.includes(t)) score++;
+          }
+          return { event, idx, score };
+        })
+        .sort((a, b) => (b.score - a.score) || (a.idx - b.idx))
+        .map((item) => item.event);
+  for (const event of ordered) {
     const source = readEventSource(event.source_hook);
     if (!source) continue;
     // Large raw outputs stay searchable. Their presence is useful; replaying their

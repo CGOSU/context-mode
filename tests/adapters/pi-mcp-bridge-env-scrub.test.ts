@@ -351,4 +351,25 @@ describe("Pi MCPStdioClient — cross-OS PI_CONFIG_DIR rescue (PR #741 follow-up
       try { rmSync(scratchDir, { recursive: true, force: true }); } catch {}
     }
   });
+
+  it("treats blank or whitespace PI_CONFIG_DIR as unset and falls back to HOME/.pi", () => {
+    const home = process.env.HOME!;
+    const homePiDir = join(home, ".pi");
+    mkdirSync(homePiDir, { recursive: true });
+    try {
+      const env: NodeJS.ProcessEnv = {
+        HOME: home,
+        PI_CONFIG_DIR: "   ",
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+      };
+      const client = new MCPStdioClient(fakeServer, env);
+      clients.push(client);
+      client.start();
+      const spawned = client._spawnEnv;
+      expect(spawned).not.toBeNull();
+      expect(spawned?.PI_CONFIG_DIR).toBe(homePiDir);
+    } finally {
+      try { rmSync(homePiDir, { recursive: true, force: true }); } catch {}
+    }
+  });
 });

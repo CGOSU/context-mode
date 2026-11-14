@@ -250,7 +250,8 @@ export class MCPStdioClient {
     //      layout). Without the APPDATA fallback, every Pi-on-Windows
     //      install silently drops back to the Claude Code default and
     //      Pi's sessions write into the wrong directory.
-    if (!childEnv.PI_CONFIG_DIR) {
+    if (!childEnv.PI_CONFIG_DIR?.trim()) {
+      delete childEnv.PI_CONFIG_DIR;
       const home = childEnv.HOME ?? childEnv.USERPROFILE ?? childEnv.HOMEPATH;
       const appData = childEnv.APPDATA; // Windows-only, undefined on POSIX
       const candidates: string[] = [];

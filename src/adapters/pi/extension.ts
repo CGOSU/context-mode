@@ -634,13 +634,17 @@ export default function piExtension(pi: any): void {
         const resume = db.getResume(_sessionId);
         const scopedResume = resume && !resume.consumed ? readResume(resume.snapshot, _sessionId, ctx) : null;
         if (scopedResume) {
-          parts.push(scopedResume.context);
+          const branchEvents = prompt.trim() ? recentBranchEvents(db.getEvents(_sessionId), ctx, 1) : [];
+          const dynamicResume = branchEvents.length
+            ? historicalContext(branchEvents, _sessionId, "session_resume", prompt)
+            : "";
+          parts.push(dynamicResume || scopedResume.context);
           resumeSnapshot = resume!.snapshot;
         } else if (mode === "always") {
           // The DB has a 1000-event hard session cap. Filter branch provenance
           // before selecting the latest 50; shared DB ordering stays unchanged.
           const events = recentBranchEvents(db.getEvents(_sessionId), ctx, 3);
-          const memory = historicalContext(events, _sessionId, "active_memory");
+          const memory = historicalContext(events, _sessionId, "active_memory", prompt);
           if (memory) parts.push(memory);
         }
       }

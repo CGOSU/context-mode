@@ -443,6 +443,30 @@ describe("closeDB — WAL checkpoint", () => {
       try { unlinkSync(dbPath + s); } catch {}
     }
   });
+
+  test("closeDB skips wal_checkpoint on readonly connections", () => {
+    const dbPath = join(tmpdir(), `wal-readonly-${Date.now()}.db`);
+    const Database = loadDatabase();
+    const writable = Database(dbPath, { timeout: 30000 });
+    applyWALPragmas(writable);
+    writable.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)");
+    writable.exec("INSERT INTO t VALUES (1, 'hello')");
+    closeDB(writable);
+
+    const ro = Database(dbPath, { readonly: true, timeout: 30000 });
+    const origPragma = ro.pragma.bind(ro);
+    let checkpointCalls = 0;
+    ro.pragma = ((source: string, ...args: unknown[]) => {
+      if (source.toLowerCase().includes("wal_checkpoint")) checkpointCalls++;
+      return (origPragma as any)(source, ...args);
+    }) as any;
+    closeDB(ro);
+    expect(checkpointCalls).toBe(0);
+
+    for (const s of ["", "-wal", "-shm"]) {
+      try { unlinkSync(dbPath + s); } catch {}
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────

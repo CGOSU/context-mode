@@ -77,7 +77,7 @@ export function searchAllSources(opts: SearchAllSourcesOpts): UnifiedSearchResul
     limit,
     store,
     sort = "relevance",
-    source,
+    source: rawSource,
     contentType,
     sessionDB,
     projectDir,
@@ -85,6 +85,9 @@ export function searchAllSources(opts: SearchAllSourcesOpts): UnifiedSearchResul
     adapter,
     projectScope,
   } = opts;
+  const source = typeof rawSource === "string" && rawSource.trim().length > 0
+    ? rawSource.trim()
+    : undefined;
 
   const results: UnifiedSearchResult[] = [];
 

@@ -424,4 +424,32 @@ describe("Windows Shell Support", () => {
     assert.equal(buildScriptFilename("python", "linux"), "script.py");
     assert.equal(buildScriptFilename("javascript", "darwin"), "script.js");
   });
+
+  test("settles promptly after exit even if a detached descendant keeps stdio open", async () => {
+    const executor = new PolyglotExecutor();
+    const start = Date.now();
+    let childPid: number | undefined;
+    try {
+      const result = await executor.execute({
+        language: "javascript",
+        code: [
+          'const { spawn } = require("node:child_process");',
+          'const c = spawn(process.execPath, ["-e", "setTimeout(() => {}, 2500)"], { stdio: ["ignore", 1, 2] });',
+          'console.log("PARENT_DONE:" + c.pid);',
+          'c.unref();',
+        ].join("\n"),
+        timeout: 5_000,
+      });
+      const elapsed = Date.now() - start;
+      const match = result.stdout.match(/PARENT_DONE:(\d+)/);
+      childPid = match ? Number(match[1]) : undefined;
+      assert.equal(result.exitCode, 0);
+      assert.ok(result.stdout.includes("PARENT_DONE:"), `stdout: ${result.stdout}`);
+      assert.ok(elapsed < 1_500, `expected bounded pipe drain settlement under 1500ms, got ${elapsed}ms`);
+    } finally {
+      if (childPid) {
+        try { process.kill(childPid, "SIGKILL"); } catch {}
+      }
+    }
+  });
 });
