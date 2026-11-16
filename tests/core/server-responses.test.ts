@@ -12,44 +12,6 @@ import { readServerSource } from "../helpers/server-source.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 
-// ─── Version outdated warning ────────────────────────────────────────────────
-
-describe("Version outdated warning in trackResponse", () => {
-  const serverSrc = readServerSource();
-
-  test("fetchLatestVersion function exists and uses npm registry", () => {
-    expect(serverSrc).toContain("function fetchLatestVersion");
-    expect(serverSrc).toContain("registry.npmjs.org/context-mode");
-  });
-
-  test("version check fires in main() after server.connect", () => {
-    const mainFn = serverSrc.slice(serverSrc.indexOf("async function main"));
-    expect(mainFn).toContain("fetchLatestVersion");
-  });
-
-  test("trackResponse prepends warning when outdated", () => {
-    const trackFn = serverSrc.slice(
-      serverSrc.indexOf("function trackResponse"),
-      serverSrc.indexOf("function trackIndexed"),
-    );
-    expect(trackFn).toContain("_latestVersion");
-    expect(trackFn).toContain("outdated");
-  });
-
-  test("warning uses burst cadence (3 calls then silent)", () => {
-    expect(serverSrc).toContain("VERSION_BURST_SIZE");
-    expect(serverSrc).toContain("VERSION_SILENT_MS");
-    expect(serverSrc).toContain("_warningBurstCount");
-  });
-
-  test("getUpgradeHint returns Pi-specific upgrade instructions", () => {
-    expect(serverSrc).toContain("function getUpgradeHint");
-    expect(serverSrc).toContain("pi update");
-    expect(serverSrc).toContain("npm run build:pi");
-  });
-});
-
-
 // ═══════════════════════════════════════════════════════════════════════════
 // FS read instrumentation (mirrors network interceptor pattern)
 // ═══════════════════════════════════════════════════════════════════════════

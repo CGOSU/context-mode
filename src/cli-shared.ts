@@ -4,7 +4,6 @@
 
 import { execFileSync, execSync, execFile as nodeExecFile, type ExecSyncOptions } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { request as httpsRequest } from "node:https";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -128,31 +127,4 @@ function getLocalVersion(): string {
   }
 }
 
-async function fetchLatestVersion(): Promise<string> {
-  // Use node:https instead of global fetch to avoid a Windows libuv assertion
-  // (UV_HANDLE_CLOSING) caused by undici's connection-pool background threads
-  // racing with process.exit() teardown on Node.js v24+.
-  return new Promise((resolve) => {
-    const req = httpsRequest(
-      "https://registry.npmjs.org/context-mode/latest",
-      { headers: { Connection: "close" } },
-      (res) => {
-        let raw = "";
-        res.on("data", (chunk: Buffer) => { raw += chunk; });
-        res.on("end", () => {
-          try {
-            const data = JSON.parse(raw) as { version?: string };
-            resolve(data.version ?? "unknown");
-          } catch {
-            resolve("unknown");
-          }
-        });
-      },
-    );
-    req.on("error", () => resolve("unknown"));
-    req.setTimeout(5000, () => { req.destroy(); resolve("unknown"); });
-    req.end();
-  });
-}
-
-export { getPluginRoot, getLocalVersion, fetchLatestVersion };
+export { getPluginRoot, getLocalVersion };

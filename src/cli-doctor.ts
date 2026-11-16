@@ -12,7 +12,7 @@ import {
   type ResolvedStorageDir,
 } from "./session/db.js";
 import { PiAdapter } from "./adapters/pi/index.js";
-import { getPluginRoot, getLocalVersion, fetchLatestVersion } from "./cli-shared.js";
+import { getPluginRoot, getLocalVersion } from "./cli-shared.js";
 
 function describeStorageSource(dir: ResolvedStorageDir): string {
   return dir.envVar ? dir.envVar : "Pi adapter default";
@@ -177,19 +177,10 @@ async function doctor(): Promise<number> {
     p.log.error(color.red("FTS5 / SQLite: FAIL") + ` — ${message}`);
   }
 
-  // Version check
-  p.log.step("Checking versions...");
+  // Report installed versions without contacting the upstream registry.
   const localVersion = getLocalVersion();
-  const latestVersion = await fetchLatestVersion();
   const installedVersion = adapter.getInstalledVersion();
-
-  if (latestVersion === "unknown") {
-    p.log.warn(color.yellow("Local: WARN") + ` — v${localVersion}, could not reach npm registry`);
-  } else if (localVersion === latestVersion) {
-    p.log.success(color.green("Local: PASS") + ` — v${localVersion}`);
-  } else {
-    p.log.warn(color.yellow("Local: WARN") + ` — v${localVersion}, latest v${latestVersion}`);
-  }
+  p.log.info(`Local version: v${localVersion}`);
 
   if (installedVersion === "not installed") {
     p.log.info(color.dim("Pi extension package.json not present in ~/.pi/extensions/context-mode (OK for local pi -e / npm install)"));

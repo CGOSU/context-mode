@@ -98,7 +98,7 @@ server.registerTool(
           } catch { /* never block ctx_stats */ }
           // Only query MCP tool usage when falling back to the legacy report (narrative early-returns without it).
           const mcpUsage = (conversation && conversation.events > 0) ? undefined : engine.getMcpToolUsage();
-          text = formatReport(report, VERSION, context._latestVersion, { lifetime, mcpUsage, conversation, realBytes, cwd: projectDir });
+          text = formatReport(report, VERSION, null, { lifetime, mcpUsage, conversation, realBytes, cwd: projectDir });
         } finally {
           sdb.close();
         }
@@ -107,7 +107,7 @@ server.registerTool(
         const engine = new AnalyticsEngine(createMinimalDb());
         const report = engine.queryAll(sessionStats);
         const lifetime = getLifetimeStats({ sessionsDir: getSessionDir() });
-        text = formatReport(report, VERSION, context._latestVersion, { lifetime });
+        text = formatReport(report, VERSION, null, { lifetime });
       }
     } catch {
       // Session DB not available or incompatible — build minimal report from runtime stats
@@ -115,7 +115,7 @@ server.registerTool(
       const report = engine.queryAll(sessionStats);
       let lifetime;
       try { lifetime = getLifetimeStats({ sessionsDir: getSessionDir() }); } catch { /* never block ctx_stats */ }
-      text = formatReport(report, VERSION, context._latestVersion, lifetime ? { lifetime } : undefined);
+      text = formatReport(report, VERSION, null, lifetime ? { lifetime } : undefined);
     }
 
     return trackResponse("ctx_stats", {

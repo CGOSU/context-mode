@@ -32,7 +32,6 @@ import { existsSync, unlinkSync, readFileSync, writeFileSync, writeSync } from "
 import { join, dirname, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
-import { request as httpsRequest } from "node:https";
 
 import { PolyglotExecutor } from "./executor.js";
 
@@ -346,86 +345,10 @@ function storageErrorResult(err: unknown): ToolResult | null {
     isError: true,
   };
 }
-// ── Version outdated warning ──────────────────────────────────────────────
-// Non-blocking npm check at startup. trackResponse prepends warning
-// using a burst cadence: 3 warnings → 1h silent → 3 warnings → repeat.
-
-let _latestVersion: string | null = null;
-let _warningBurstCount = 0;
-let _lastBurstStart = 0;
-const VERSION_BURST_SIZE = 3;
-const VERSION_SILENT_MS = 60 * 60 * 1000; // 1 hour
-
-async function fetchLatestVersion(): Promise<string> {
-  return new Promise((res) => {
-    const req = httpsRequest(
-      "https://registry.npmjs.org/context-mode/latest",
-      { headers: { Connection: "close" } },
-      (resp) => {
-        let raw = "";
-        resp.on("data", (chunk: Buffer) => { raw += chunk; });
-        resp.on("end", () => {
-          try {
-            const data = JSON.parse(raw) as { version?: string };
-            res(data.version ?? "unknown");
-          } catch { res("unknown"); }
-        });
-      },
-    );
-    req.on("error", () => res("unknown"));
-    req.setTimeout(5000, () => { req.destroy(); res("unknown"); });
-    req.end();
-  });
-}
-
-function getUpgradeHint(): string {
-  // Pi can load npm/Git packages or local forks; building alone never updates source.
-  return "Pi package: pi list, then pi update <original npm:/git: source>; " +
-    "local checkout: update source and dependencies, then npm run build:pi. Fully restart Pi.";
-}
-
-function semverNewer(a: string, b: string): boolean {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] ?? 0) > (pb[i] ?? 0)) return true;
-    if ((pa[i] ?? 0) < (pb[i] ?? 0)) return false;
-  }
-  return false;
-}
-
-function isOutdated(): boolean {
-  if (!_latestVersion || _latestVersion === "unknown") return false;
-  return semverNewer(_latestVersion, VERSION);
-}
-
-function shouldShowVersionWarning(): boolean {
-  if (!isOutdated()) return false;
-  const now = Date.now();
-  // Start of a new burst?
-  if (_warningBurstCount >= VERSION_BURST_SIZE) {
-    if (now - _lastBurstStart < VERSION_SILENT_MS) return false; // still silent
-    _warningBurstCount = 0; // silence over, reset burst
-  }
-  if (_warningBurstCount === 0) _lastBurstStart = now;
-  _warningBurstCount++;
-  return true;
-}
-
 function trackResponse(toolName: string, response: ToolResult, maxOutputChars?: number, sandboxedBytes?: number): ToolResult {
   // #854: a response is activity too — refresh the bridge-child idle clock so a
   // chatty/streaming call keeps its server alive even between inbound frames.
   noteMcpActivity();
-  // Prepend version outdated warning if needed
-  if (shouldShowVersionWarning() && response.content.length > 0) {
-    const hint = getUpgradeHint();
-    const warning = `ℹ️ context-mode: npm v${_latestVersion} available (running v${VERSION}). Upgrade: ${hint}\n\n`;
-    const size = response.content.map(c => c.text).join("\n").length;
-    // An optional upgrade hint must never displace execution evidence.
-    if (maxOutputChars === undefined || size + warning.length <= maxOutputChars) {
-      response.content[0].text = warning + response.content[0].text;
-    }
-  }
   if (maxOutputChars !== undefined && response.content.length) {
     const joined = response.content.length === 1
       ? response.content[0].text
@@ -630,7 +553,6 @@ export interface ServerToolContext {
   CM_FS_PRELOAD: typeof CM_FS_PRELOAD;
   VERSION: typeof VERSION;
   _detectedAdapter: PiAdapter;
-  _latestVersion: string | null;
   _store: ContentStore | null;
   available: typeof available;
   bunNote: typeof bunNote;
@@ -660,7 +582,6 @@ const toolContext: ServerToolContext = {
   CM_FS_PRELOAD,
   VERSION,
   _detectedAdapter,
-  get _latestVersion() { return _latestVersion; },
   get _store() { return _store; },
   set _store(value) { _store = value; },
   available,
@@ -759,12 +680,6 @@ async function main() {
       }
     }
   } catch { /* best effort — never block startup on a stats restore failure */ }
-
-  // Non-blocking version check — result stored for trackResponse warnings.
-  fetchLatestVersion().then(v => { if (v !== "unknown") _latestVersion = v; });
-  setInterval(() => {
-    fetchLatestVersion().then(v => { if (v !== "unknown") _latestVersion = v; });
-  }, 60 * 60 * 1000).unref();
 
   if (process.stdin.isTTY) {
     console.error(`Context Mode MCP server v${VERSION} running on stdio`);
